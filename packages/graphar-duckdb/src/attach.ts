@@ -172,6 +172,11 @@ const COUNT = `CASE WHEN octet_length(content) = 8
  * reads a relative one against its working directory; without one, the data is under the document,
  * which is GraphAr's default. Only Parquet is read.
  *
+ * A vertex type whose internal ids are not continuous — its first group's chunks do not hold
+ * `vertex_count` rows numbered `0 … vertex_count − 1` — is `invalid`, naming the type: the
+ * specification numbers vertices from 0 by row, and a global id built as a prefix sum of the counts
+ * plus this index is injective only without gaps. The check reads the chunks' footers.
+ *
  * @throws {GraphArError} before any view is made, for what the files hold (`unreadable`,
  *   `unparseable`, `invalid`, `unsupported`, `duplicate`); `engine` when a view is refused. An abort
  *   rejects with the signal's reason. Either way the catalog is given back.
@@ -283,6 +288,39 @@ export async function attachGraph(
   });
   const chunkNames = await names(chunkPaths);
   const files = (indices: readonly number[]) => list(indices.map((i) => chunkNames[i]!));
+
+  // The internal vertex id is continuous: "each vertex assigned with a global index inside this
+  // type (called internal vertex id) starting from 0, corresponding to the row number of the vertex
+  // in the logical vertex table" (format.md, "Logical table of vertices"). The GraphAr paper allows
+  // gaps ("bubbles"); the specification does not, and a global id that is a prefix sum of the
+  // counts plus this index is injective only if there are none. So, per vertex type, the rows of
+  // the first property group's chunks number `vertex_count` and the largest id is one below it. It
+  // is a statement over the chunks' footers: Parquet keeps the row count and the extremes there.
+  const checked = vertices.flatMap((v, i) => (vertexCounts[i] === 0 ? [] : [{ v, count: vertexCounts[i]!, group: vertexFiles[i]![0] }]))
+    .filter((c) => c.group !== undefined);
+  if (checked.length > 0) {
+    const sql = checked
+      .map(
+        ({ v, group }) => `SELECT ${lit(v.type)} AS type, count(*) AS n, min(${ident(VERTEX_INDEX_COL)}) AS lo, max(${ident(VERTEX_INDEX_COL)}) AS hi
+          FROM read_parquet(${files(group!)})`,
+      )
+      .join(' UNION ALL ');
+    const answer = await run(sql, (cause) => new GraphArError('unreadable', 'the vertex chunks did not read', { cause }));
+    const column = (name: string) => answer.getChild(name);
+    for (let row = 0; row < answer.numRows; row++) {
+      const type = String(column('type')!.get(row));
+      const { count } = checked.find((c) => c.v.type === type)!;
+      const [n, lo, hi] = ['n', 'lo', 'hi'].map((c) => Number(column(c)!.get(row)));
+      if (n !== count || lo !== 0 || hi !== count - 1) {
+        throw new GraphArError(
+          'invalid',
+          `vertex \`${type}\`: the internal vertex id (\`${VERTEX_INDEX_COL}\`) is not continuous: \`vertex_count\` is ${count}, ` +
+            `the chunks hold ${n} rows with ids from ${lo} to ${hi}, and the specification numbers a type's vertices from 0 to ${count - 1}`,
+          { document: type },
+        );
+      }
+    }
+  }
 
   const viewOf = (name: string, sql: string) => `CREATE OR REPLACE VIEW ${ident(catalog)}.${ident(name)} AS ${sql}`;
   const statements: string[] = [];
