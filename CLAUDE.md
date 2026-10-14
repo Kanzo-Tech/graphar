@@ -22,3 +22,6 @@
   `pnpm install && pnpm typecheck && pnpm test && pnpm build`.
 - `@kanzo-tech/graphar-duckdb` links no engine and loads no WASM: every file it reads goes through
   the host's DuckDB, by the name the host's `resolve` gives it.
+- Releases are GitHub Releases (`.github/workflows/release.yml`, see the README): the tag `v<version>`
+  must equal every crate's and package's `version`, the release body is the release notes, and there
+  is no CHANGELOG. It needs the secrets `CRATES_IO_TOKEN` and `NPM_TOKEN`. Never publish by hand.

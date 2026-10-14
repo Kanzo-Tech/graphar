@@ -1,0 +1,110 @@
+name: release
+
+# Publishes when a GitHub Release is published: `graphar-info` then `graphar-parquet` to crates.io,
+# and `@kanzo-tech/graphar-duckdb` to npm. The release is the decision, made by a person, and this
+# workflow only carries it out: no version PR, no CHANGELOG. The release body is the release notes.
+#
+# THE TAG DECIDES THE VERSION, and `check` refuses a tag that disagrees with the committed
+# versions: `v0.1.0-alpha.0` needs every Cargo.toml and package.json at `0.1.0-alpha.0`. Bump them
+# in a commit, merge it, then tag that commit. All three artifacts share one version.
+#
+# A prerelease tag (`v0.2.0-rc.1`) publishes to npm under its identifier as the dist-tag (`rc`),
+# so `latest` stays where it was. crates.io has no dist-tags; a prerelease version is skipped by
+# default resolution there.
+#
+# SECRETS the owner adds (Settings -> Secrets and variables -> Actions):
+#   CRATES_IO_TOKEN   a crates.io token with the `publish-new` and `publish-update` scopes
+#   NPM_TOKEN         an npm automation token that can publish under @kanzo-tech
+# npm provenance is on: the job has `id-token: write`, and npm rejects (422) a package whose
+# `repository.url` does not match this repository. It does.
+
+on:
+  release:
+    types: [published]
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: The tag is the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - name: Tag, Cargo.toml and package.json agree
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_NAME" = "$version" ]; then
+            echo "tag \`$GITHUB_REF_NAME\` does not start with v" >&2
+            exit 1
+          fi
+          bad=0
+          while IFS=$'\t' read -r name found; do
+            echo "  $name $found"
+            [ "$found" = "$version" ] || { echo "$name is $found, the tag says $version" >&2; bad=1; }
+          done < <(cargo metadata --no-deps --format-version 1 \
+                     | jq -r '.packages[] | [.name, .version] | @tsv')
+          for manifest in packages/*/package.json; do
+            [ "$(jq -r '.private // false' "$manifest")" = "true" ] && continue
+            name="$(jq -r .name "$manifest")"; found="$(jq -r .version "$manifest")"
+            echo "  $name $found"
+            [ "$found" = "$version" ] || { echo "$name is $found, the tag says $version" >&2; bad=1; }
+          done
+          exit $bad
+
+  # The same chain CI runs on every PR, on the commit the tag names.
+  ci:
+    name: The CI chain passes on this commit
+    uses: ./.github/workflows/ci.yml
+
+  crates:
+    name: Publish to crates.io
+    needs: [check, ci]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      # In dependency order. `cargo publish` waits for the index to list a crate before it
+      # returns, so graphar-parquet finds the graphar-info it was just published against.
+      - name: Publish graphar-info
+        run: cargo publish -p graphar-info --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      - name: Publish graphar-parquet
+        run: cargo publish -p graphar-parquet --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+  npm:
+    name: Publish to npm
+    needs: [check, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Signs the provenance statement.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Publish
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in
+            *-*) tag="${version#*-}"; tag="${tag%%.*}" ;;
+            *)   tag="latest" ;;
+          esac
+          pnpm --filter "./packages/*" publish --access public --provenance --tag "$tag" --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
