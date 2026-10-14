@@ -3,7 +3,7 @@
  * attached to a native DuckDB. Its values are `crates/graphar-parquet/tests/sample/mod.rs`'s.
  */
 
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 
@@ -155,7 +155,7 @@ describe('attachGraph', () => {
     expect(asked[0]).toEqual([entry]);
     expect(asked[1]).toContain('person_knows_person.edge.yml');
     expect(asked.flat().every((p) => !p.startsWith('/') && !p.startsWith('.'))).toBe(true);
-    expect(e.statements.filter((s) => s.startsWith('SELECT')).length).toBe(4);
+    expect(e.statements.filter((s) => s.startsWith('SELECT')).length).toBe(5);
   });
 
   it('keeps a catalog two attachments share until the last detaches', async () => {
@@ -285,5 +285,36 @@ describe('attachGraph over user_defined: a list of a user-defined type', () => {
     expect(await e.rows(`SELECT column_type FROM (DESCRIBE "u"."concept") WHERE column_name = 'labels'`)).toEqual([
       { column_type: 'STRUCT("value" VARCHAR, lang VARCHAR)[]' },
     ]);
+  });
+});
+
+describe('attachGraph and the internal vertex id', () => {
+  // "starting from 0, corresponding to the row number of the vertex in the logical vertex table"
+  // (format.md): a gap would make a prefix-sum global id collide with the next type's first.
+  it('refuses a type whose ids have a gap, naming it', async () => {
+    const dir = await copy(entry, (t) => t);
+    const e = await engine();
+    // `person`'s last chunk holds id 6; make it 7, so 7 rows run 0..7.
+    const chunk = join(dir, 'vertex/person/id/chunk2');
+    await e.rows(`COPY (SELECT _graphArVertexIndex + 1 AS _graphArVertexIndex, id FROM read_parquet('${chunk}')) TO '${chunk}.new' (FORMAT parquet)`);
+    await rename(`${chunk}.new`, chunk);
+    const attaching = attachGraph(e, 'gap', under(dir), { entry });
+    await expect(attaching).rejects.toMatchObject({ code: 'invalid', document: 'person' });
+    await expect(attaching).rejects.toThrow(/vertex `person`.*not continuous.*ids from 0 to 7/);
+    expect(await e.rows(`SELECT count(*)::INTEGER AS n FROM duckdb_databases() WHERE database_name = 'gap'`)).toEqual([{ n: 0 }]);
+  });
+
+  it('refuses ids that start above 0, and rows that are not the count', async () => {
+    const e = await engine();
+    const shifted = await copy(entry, (t) => t);
+    for (const k of [0, 1, 2]) {
+      const chunk = join(shifted, `vertex/person/id/chunk${k}`);
+      await e.rows(`COPY (SELECT _graphArVertexIndex + 1 AS _graphArVertexIndex, id FROM read_parquet('${chunk}')) TO '${chunk}.new' (FORMAT parquet)`);
+      await rename(`${chunk}.new`, chunk);
+    }
+    await expect(attachGraph(e, 'a', under(shifted), { entry })).rejects.toMatchObject({ code: 'invalid', document: 'person' });
+    const short = await copy(entry, (t) => t);
+    await writeFile(join(short, 'vertex/software/vertex_count'), Buffer.from([4, 0, 0, 0, 0, 0, 0, 0]));
+    await expect(attachGraph(e, 'b', under(short), { entry })).rejects.toMatchObject({ code: 'invalid', document: 'software' });
   });
 });
