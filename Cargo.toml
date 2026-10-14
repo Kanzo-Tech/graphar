@@ -9,7 +9,7 @@ license = "Apache-2.0"
 repository = "https://github.com/Kanzo-Tech/graphar"
 
 [workspace.dependencies]
-graphar-info = { path = "crates/graphar-info", version = "0.1.0-alpha.0" }
+graphar-info = { path = "crates/graphar-info", version = "0.1.0-alpha.1" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
 thiserror = "2"
