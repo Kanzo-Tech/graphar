@@ -1,6 +1,6 @@
 {
   "name": "@kanzo-tech/graphar-duckdb",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "An Apache GraphAr graph attached to a DuckDB engine: its YAML read through the engine, a view per vertex and edge type over the Parquet chunks, and the graph's metadata as four relations. TypeScript only: no WASM, no engine of its own.",
   "license": "Apache-2.0",
   "repository": {

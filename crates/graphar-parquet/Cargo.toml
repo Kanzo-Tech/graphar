@@ -1,6 +1,6 @@
 [package]
 name = "graphar-parquet"
-version = "0.1.0-alpha.0"
+version = "0.1.0-alpha.1"
 description = "Apache GraphAr's data files in Parquet: vertex and edge chunks, offsets and counts, written and read through any object_store. Builds for wasm32."
 keywords = ["graphar", "graph", "property-graph", "parquet"]
 categories = ["data-structures", "encoding", "wasm"]
