@@ -80,7 +80,7 @@ export interface Property {
   /** `!is_primary` when the document says nothing. */
   readonly is_nullable: boolean;
   /** `single`, `list` or `set`; `single` when the document says nothing. */
-  readonly cardinality: string;
+  readonly cardinality: 'single' | 'list' | 'set';
 }
 
 /** The `<src_type>_<edge_type>_<dst_type>` that names an edge type's file and table. */
@@ -178,7 +178,7 @@ function group(value: unknown, at: string): PropertyGroup {
       data_type: r.string('data_type'),
       is_primary,
       is_nullable: r.bool('is_nullable', !is_primary),
-      cardinality: r.string('cardinality', 'single'),
+      cardinality: cardinality(r.string('cardinality', 'single'), at),
     };
   });
   if (properties.length === 0) throw invalid(at, '`properties` is empty');
@@ -187,6 +187,12 @@ function group(value: unknown, at: string): PropertyGroup {
     file_type: g.string('file_type'),
     prefix: g.optionalString('prefix') ?? `${properties.map((p) => p.name).join('_')}/`,
   };
+}
+
+/** GraphAr's cardinalities: C++ `StringToCardinality`. */
+function cardinality(value: string, at: string): 'single' | 'list' | 'set' {
+  if (value !== 'single' && value !== 'list' && value !== 'set') throw invalid(at, `cardinality \`${value}\` is not \`single\`, \`list\` or \`set\``);
+  return value;
 }
 
 /** Parses one vertex document. */

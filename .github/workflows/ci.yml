@@ -47,14 +47,14 @@ jobs:
         env:
           GRAPHAR_TESTING: ${{ github.workspace }}/incubator-graphar-testing
         run: cargo test -p graphar-parquet --locked --test testing_data -- --ignored
-      # conformance/sample is what the C++ reader below and graphar-duckdb's tests open, and it is
-      # exactly what the writer writes today.
-      - name: conformance/sample is the writer's
+      # conformance/{sample,user_defined} are what the C++ reader below and graphar-duckdb's tests
+      # open, and they are exactly what the writer writes today.
+      - name: conformance graphs are the writer's
         run: |
-          rm -rf conformance/sample
-          cargo run -p graphar-parquet --example sample --locked -- conformance/sample
-          git add -N conformance/sample
-          git diff --exit-code --stat -- conformance/sample
+          rm -rf conformance/sample conformance/user_defined
+          cargo run -p graphar-parquet --example sample --locked -- conformance
+          git add -N conformance
+          git diff --exit-code --stat -- conformance
 
   # graphar-duckdb, tested on a native DuckDB against conformance/sample.
   node:
@@ -82,4 +82,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install graphar==0.13.0.dev1
-      - run: python conformance/read_cpp.py conformance/sample/sample.graph.yml
+      - run: python conformance/read_cpp.py conformance

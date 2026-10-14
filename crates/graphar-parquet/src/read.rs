@@ -96,7 +96,7 @@ pub async fn read_edge_property_chunk(
 
 /// **Reads the offset chunk of part `part`** of an ordered adjacency list: for each vertex of the
 /// vertex chunk, where its edges begin in the part, and one more entry, where the last one's end.
-/// `_graphArOffset` is `int64` as C++ writes it, or `int32` as GraphAr's Spark writer does
+/// The specification does not give the column's type. `_graphArOffset` is `int64` as C++ writes it, or `int32` as GraphAr's Spark writer does
 /// (`EdgeWriter.scala`); either is answered as `i64`.
 pub async fn read_offsets(
     store: &dyn ObjectStore,

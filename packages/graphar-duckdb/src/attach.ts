@@ -47,6 +47,13 @@ export interface AttachOptions {
   readonly entry: string;
   /** Stops the attach: it rejects with the signal's reason, and what it made is given back. */
   readonly signal?: AbortSignal;
+  /**
+   * The DuckDB type of each user-defined type the graph's version declares (`gar/v1 (langString)`),
+   * as SQL: `{ langString: 'STRUCT(value VARCHAR, lang VARCHAR)' }`. GraphAr names such types and
+   * defines no storage for them, so a view over chunks reads the type from the Parquet file, and
+   * this is needed only to type a view that has no chunk to read: a type with no rows.
+   */
+  readonly userTypes?: Readonly<Record<string, string>>;
 }
 
 /** A graph attached by {@link attachGraph}. */
@@ -94,19 +101,22 @@ const edgeCount = (e: EdgeInfo, a: AdjacentList, p: number) => `${dir(e.prefix, 
 const edgeVertexCount = (e: EdgeInfo, a: AdjacentList) => `${dir(e.prefix, a.prefix)}vertex_count`;
 
 /** GraphAr's type as DuckDB's, for a relation with no file to read its type from. */
-function duckType(dataType: string, at: string): string {
+function duckType(dataType: string, at: string, userTypes: Readonly<Record<string, string>>): string {
   const list = /^list<(.+)>$/.exec(dataType);
-  if (list) return `${duckType(list[1]!, at)}[]`;
+  if (list) return `${duckType(list[1]!, at, userTypes)}[]`;
+  if (Object.hasOwn(userTypes, dataType)) return userTypes[dataType]!;
   const t = ({
     bool: 'BOOLEAN', int32: 'INTEGER', int64: 'BIGINT', float: 'FLOAT', double: 'DOUBLE', string: 'VARCHAR',
     date: 'DATE', timestamp: 'TIMESTAMP', time: 'TIME',
   } as Record<string, string>)[dataType];
-  if (t === undefined) throw new GraphArError('unsupported', `${at}: data type \`${dataType}\` has no DuckDB type here`);
+  if (t === undefined) {
+    throw new GraphArError('unsupported', `${at}: data type \`${dataType}\` has no DuckDB type: GraphAr defines none, and \`userTypes\` gives none`);
+  }
   return t;
 }
 
-const propertyType = (p: Property, at: string): string =>
-  p.cardinality === 'single' ? duckType(p.data_type, at) : `${duckType(p.data_type, at)}[]`;
+const propertyType = (p: Property, at: string, userTypes: Readonly<Record<string, string>>): string =>
+  p.cardinality === 'single' ? duckType(p.data_type, at, userTypes) : `${duckType(p.data_type, at, userTypes)}[]`;
 
 /**
  * A relation of these columns and rows, typed even when it has no row — a `VALUES` with none is
@@ -146,9 +156,11 @@ const COUNT = `CASE WHEN octet_length(content) = 8
  *   `vertex_count` file; `ordinal` is its place in the graph document's `vertices`, from 1.
  * - `graphar_edge_types(name, src_type, edge_type, dst_type, count, directed, ordinal)`: one row
  *   per edge type, `name` its view's; `count` sums the first adjacency list's `edge_count` files.
- * - `graphar_properties(type, property, data_type, is_primary, is_nullable, ordinal)`: one row per
- *   property; `type` is the vertex type or the edge type's `name`; `data_type` is GraphAr's word;
- *   `ordinal` is the column's place in the type's view after GraphAr's id columns, from 1.
+ * - `graphar_properties(type, property, data_type, is_primary, is_nullable, ordinal, cardinality)`: one row per
+ *   property; `type` is the vertex type or the edge type's `name`; `data_type` is GraphAr's word, a
+ *   user-defined type's name as written; `ordinal` is the column's place in the type's view after
+ *   GraphAr's id columns, from 1; `cardinality` is `single`, `list` or `set`, and a column of any
+ *   other than `single` is a DuckDB list of `data_type`.
  * - `graphar_extra_info(key, value)`: the graph document's `extra_info`, in order.
  * - `graphar_chunks(type, kind, path)`: one row per Parquet chunk file the views read, in the order
  *   vertex type, then edge type; `kind` is `vertex`, `offset`, `adj_list` or `edge_property`; `path` is
@@ -171,6 +183,7 @@ export async function attachGraph(
   options: AttachOptions,
 ): Promise<GraphAttachment> {
   const { entry, signal } = options;
+  const userTypes = options.userTypes ?? {};
   const quiet = new AbortController().signal;
   const run = async (sql: string, fail: (cause: unknown) => GraphArError, s: AbortSignal | undefined = signal): Promise<Table> => {
     s?.throwIfAborted();
@@ -226,16 +239,15 @@ export async function attachGraph(
   const parquet = (at: string, fileType: string) => {
     if (fileType !== 'parquet') throw new GraphArError('unsupported', `${at}: file type \`${fileType}\` is not Parquet`);
   };
+  // Only a relation with no chunk to read its types from needs them, so only it asks.
   const types = (at: string, groups: readonly PropertyGroup[]) =>
-    groups.flatMap((g) => g.properties.map((p) => [p.name, propertyType(p, at)] as const));
+    groups.flatMap((g) => g.properties.map((p) => [p.name, propertyType(p, at, userTypes)] as const));
   for (const v of vertices) {
     for (const g of v.property_groups) parquet(`vertex \`${v.type}\``, g.file_type);
-    types(`vertex \`${v.type}\``, v.property_groups);
   }
   for (const e of edges) {
     parquet(`edge \`${edgeName(e)}\`, ${e.adj_lists[0]!.type}`, e.adj_lists[0]!.file_type);
     for (const g of e.property_groups) parquet(`edge \`${edgeName(e)}\``, g.file_type);
-    types(`edge \`${edgeName(e)}\``, e.property_groups);
   }
 
   // The counts: every type's, then every part's of each edge type's first adjacency list.
@@ -278,7 +290,7 @@ export async function attachGraph(
     const groups = vertexFiles[i]!;
     let sql: string;
     if (vertexCounts[i] === 0) {
-      sql = relationOf([[VERTEX_INDEX_COL, 'BIGINT'], ...types('', v.property_groups)], []);
+      sql = relationOf([[VERTEX_INDEX_COL, 'BIGINT'], ...types(`vertex \`${v.type}\``, v.property_groups)], []);
     } else if (groups.length === 0) {
       sql = `SELECT CAST(range AS BIGINT) AS ${ident(VERTEX_INDEX_COL)} FROM range(${vertexCounts[i]})`;
     } else {
@@ -294,7 +306,7 @@ export async function attachGraph(
     const { adj, groups } = edgeFiles[i]!;
     let sql: string;
     if (adj.length === 0) {
-      sql = relationOf([[SRC_INDEX_COL, 'BIGINT'], [DST_INDEX_COL, 'BIGINT'], ...types('', e.property_groups)], []);
+      sql = relationOf([[SRC_INDEX_COL, 'BIGINT'], [DST_INDEX_COL, 'BIGINT'], ...types(`edge \`${edgeName(e)}\``, e.property_groups)], []);
     } else if (groups.length === 0) {
       sql = `SELECT * FROM read_parquet(${files(adj)})`;
     } else {
@@ -338,14 +350,14 @@ export async function attachGraph(
     )),
     viewOf('graphar_properties', relationOf(
       [['type', 'VARCHAR'], ['property', 'VARCHAR'], ['data_type', 'VARCHAR'], ['is_primary', 'BOOLEAN'], ['is_nullable', 'BOOLEAN'],
-        ['ordinal', 'INTEGER']],
+        ['ordinal', 'INTEGER'], ['cardinality', 'VARCHAR']],
       [
         ...vertices.map((v) => [v.type, v.property_groups] as const),
         ...edges.map((e) => [edgeName(e), e.property_groups] as const),
       ].flatMap(([type, groups]) =>
         groups.flatMap((g) => g.properties).map((p, n) => [
-          lit(type), lit(p.name), lit(p.cardinality === 'single' ? p.data_type : `${p.cardinality}<${p.data_type}>`),
-          String(p.is_primary), String(p.is_nullable), String(n + 1),
+          lit(type), lit(p.name), lit(p.data_type),
+          String(p.is_primary), String(p.is_nullable), String(n + 1), lit(p.cardinality),
         ]),
       ),
     )),

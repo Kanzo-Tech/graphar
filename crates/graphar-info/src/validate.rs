@@ -146,8 +146,10 @@ fn groups(
     let mut names = HashSet::new();
     for (i, g) in groups.iter().enumerate() {
         let at_group = format!("{at}, property group {i}");
-        // C++'s `IsValidated` also refuses `json`; the specification lists JSON among the file
-        // types (format.md, "Data File Format"), and the specification wins.
+        // **A departure from C++**, whose `IsValidated` refuses `json`. The specification says:
+        // "GraphAr supports multiple file formats for storing the actual data of vertices and
+        // edges, including Apache ORC, Apache Parquet, CSV, and JSON" (format.md, "Data File
+        // Format"), and the specification wins.
         if g.prefix.is_empty() {
             return Err(invalid(&at_group, "`prefix` is empty"));
         }
