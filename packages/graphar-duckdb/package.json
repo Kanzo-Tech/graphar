@@ -1,0 +1,40 @@
+{
+  "name": "@kanzo-tech/graphar-duckdb",
+  "version": "0.1.0-alpha.0",
+  "description": "An Apache GraphAr graph attached to a DuckDB engine: its YAML read through the engine, a view per vertex and edge type over the Parquet chunks, and the graph's metadata as four relations. TypeScript only: no WASM, no engine of its own.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kanzo-Tech/graphar.git",
+    "directory": "packages/graphar-duckdb"
+  },
+  "keywords": ["graphar", "graph", "property-graph", "duckdb", "parquet"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist/"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "js-yaml": "5.4.2"
+  },
+  "devDependencies": {
+    "@duckdb/node-api": "1.5.5-r.5",
+    "@types/node": "^22.0.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}
