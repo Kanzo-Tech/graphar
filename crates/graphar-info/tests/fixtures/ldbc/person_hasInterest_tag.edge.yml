@@ -1,0 +1,16 @@
+src_type: person
+edge_type: hasInterest
+dst_type: tag
+chunk_size: 8192
+src_chunk_size: 4096
+dst_chunk_size: 4096
+prefix: edge/person_hasInterest_tag/
+directed: true
+adj_lists:
+  - ordered: true
+    aligned_by: dst
+    file_type: parquet
+  - ordered: true
+    aligned_by: src
+    file_type: parquet
+version: gar/v1

@@ -1,0 +1,9 @@
+name: ldbc
+vertices:
+  - place.vertex.yml
+  - organisation.vertex.yml
+  - person.vertex.yml
+edges:
+  - place_isPartOf_place.edge.yml
+  - organisation_isLocatedIn_place.edge.yml
+version: gar/v1
