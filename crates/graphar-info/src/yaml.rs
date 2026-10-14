@@ -1,5 +1,6 @@
 //! The documents as they are written. Each struct's field order is the order the C++ library's
-//! `Dump` writes the keys in, so a dump reads like GraphAr's own. A key GraphAr does not define is
+//! `Dump` assigns the keys in (mini-yaml then writes its maps sorted), and the testing data's
+//! files follow it, so a dump reads like GraphAr's own. A key GraphAr does not define is
 //! refused, never dropped: the model carries everything the document says.
 
 use serde::{Deserialize, Serialize};
@@ -144,10 +145,54 @@ fn parse<'a, T: Deserialize<'a>>(yaml: &'a str, document: &str) -> Result<T, Err
 }
 
 fn write<T: Serialize>(doc: &T, document: &str) -> Result<String, Error> {
-    serde_yaml_ng::to_string(doc).map_err(|source| Error::Yaml {
-        document: document.to_owned(),
-        source,
-    })
+    serde_yaml_ng::to_string(doc)
+        .map(|text| indent_sequences(&text))
+        .map_err(|source| Error::Yaml {
+            document: document.to_owned(),
+            source,
+        })
+}
+
+/// The emitter's block sequences, indented under their key.
+///
+/// `serde_yaml_ng` writes a sequence at its key's own column (`vertices:` then `- a.vertex.yml`),
+/// which YAML allows and GraphAr's C++ parser, mini-yaml, refuses: "Different entry is not allowed
+/// in this context". Every file of `incubator-graphar-testing` indents them by two, and so does
+/// C++'s own `Dump`, so this does too. A line is shifted by two for each such sequence it is
+/// inside; a sequence is the run of lines from its first `- ` to the next line at its column that
+/// is not an item.
+fn indent_sequences(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 4);
+    // The column of each indentless sequence the line may be inside, outermost first.
+    let mut open: Vec<usize> = Vec::new();
+    // The column of the key on the previous line, when that line is a key with no value.
+    let mut bare_key: Option<usize> = None;
+    for line in text.lines() {
+        let body = line.trim_start_matches(' ');
+        let column = line.len() - body.len();
+        let item = body.starts_with("- ") || body == "-";
+        while open
+            .last()
+            .is_some_and(|&s| column < s || (column == s && !item))
+        {
+            open.pop();
+        }
+        if item && bare_key == Some(column) {
+            open.push(column);
+        }
+        out.extend(std::iter::repeat_n(' ', column + 2 * open.len()));
+        out.push_str(body);
+        out.push('\n');
+        // `- key:` opens its key two columns in, once per leading `- `.
+        let mut key = body;
+        let mut key_column = column;
+        while let Some(rest) = key.strip_prefix("- ") {
+            key = rest;
+            key_column += 2;
+        }
+        bare_key = (key.ends_with(':') && !key.starts_with(['"', '\'', '#'])).then_some(key_column);
+    }
+    out
 }
 
 pub(crate) fn load_graph(
