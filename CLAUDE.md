@@ -18,4 +18,7 @@
   conformance/sample`, never by hand; CI rewrites it and fails on a difference.
 - Before pushing: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`,
-  `cargo check --target wasm32-unknown-unknown -p graphar-info -p graphar-parquet`.
+  `cargo check --target wasm32-unknown-unknown -p graphar-info -p graphar-parquet`, and
+  `pnpm install && pnpm typecheck && pnpm test && pnpm build`.
+- `@kanzo-tech/graphar-duckdb` links no engine and loads no WASM: every file it reads goes through
+  the host's DuckDB, by the name the host's `resolve` gives it.
