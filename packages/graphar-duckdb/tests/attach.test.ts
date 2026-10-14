@@ -89,6 +89,45 @@ describe('attachGraph over the sample', async () => {
     expect(await e.rows(`SELECT * FROM "g".graphar_extra_info`)).toEqual([{ key: 'written_by', value: 'graphar-parquet' }]);
   });
 
+  it('holds the chunk files by the names resolve gave, one row each', async () => {
+    const rows = await e.rows(`SELECT type, kind, path FROM "g".graphar_chunks`);
+    const count = (type: string, kind: string) => rows.filter((r) => r['type'] === type && r['kind'] === kind).length;
+    expect(rows.every((r) => String(r['path']).startsWith(`${SAMPLE}/`))).toBe(true);
+    expect(count('person', 'vertex')).toBe(6); // 3 chunks of 3, two groups
+    expect(count('software', 'vertex')).toBe(2);
+    expect(count('nickname', 'vertex')).toBe(1);
+    expect(count('person_knows_person', 'offset')).toBe(3); // a chunk per vertex chunk
+    expect(count('person_knows_person', 'adj_list')).toBe(3); // the empty part has none
+    expect(count('person_knows_person', 'edge_property')).toBe(3);
+    expect(count('person_created_software', 'offset')).toBe(3);
+    expect(rows.length).toBe(6 + 2 + 1 + 3 + 3 + 3 + 3 + 2);
+    expect(new Set(rows.map((r) => r['kind']))).toEqual(new Set(['vertex', 'offset', 'adj_list', 'edge_property']));
+    // A consumer reads a chunk's footer by that name.
+    const [first] = rows.filter((r) => r['kind'] === 'adj_list');
+    const meta = num(await e.rows(`SELECT sum(num_rows)::INTEGER AS n FROM parquet_file_metadata('${first!['path']}')`));
+    expect(meta[0]!['n']).toBeGreaterThan(0);
+    // Every listed path is a Parquet file.
+    for (const r of rows) {
+      expect(num(await e.rows(`SELECT count(*)::INTEGER AS n FROM parquet_file_metadata('${r['path']}')`))[0]!['n']).toBe(1);
+    }
+  });
+
+  it('declares the type of every column of the five relations', async () => {
+    const columns = async (relation: string) =>
+      (await e.rows(`SELECT column_name, column_type FROM (DESCRIBE "g".${relation})`)).map((r) => [r['column_name'], r['column_type']]);
+    expect(await columns('graphar_vertex_types')).toEqual([['type', 'VARCHAR'], ['count', 'UBIGINT'], ['ordinal', 'INTEGER']]);
+    expect(await columns('graphar_edge_types')).toEqual([
+      ['name', 'VARCHAR'], ['src_type', 'VARCHAR'], ['edge_type', 'VARCHAR'], ['dst_type', 'VARCHAR'], ['count', 'UBIGINT'],
+      ['directed', 'BOOLEAN'], ['ordinal', 'INTEGER'],
+    ]);
+    expect(await columns('graphar_properties')).toEqual([
+      ['type', 'VARCHAR'], ['property', 'VARCHAR'], ['data_type', 'VARCHAR'], ['is_primary', 'BOOLEAN'], ['is_nullable', 'BOOLEAN'],
+      ['ordinal', 'INTEGER'],
+    ]);
+    expect(await columns('graphar_extra_info')).toEqual([['key', 'VARCHAR'], ['value', 'VARCHAR']]);
+    expect(await columns('graphar_chunks')).toEqual([['type', 'VARCHAR'], ['kind', 'VARCHAR'], ['path', 'VARCHAR']]);
+  });
+
   it('gives a reader one id space by arithmetic over the relations', async () => {
     // What `@kanzo-tech/graph` computes: first(t) is the sum of the counts of the types before it.
     const rows = num(await e.rows(`
@@ -150,6 +189,7 @@ describe('attachGraph', () => {
       { column_name: 'value', data_type: 'VARCHAR' },
     ]);
     expect(await e.rows(`SELECT count(*)::INTEGER AS n FROM "empty"."person_created_software"`)).toEqual([{ n: 0 }]);
+    expect(await e.rows(`SELECT column_type FROM (DESCRIBE "empty".graphar_chunks)`)).toHaveLength(3);
     expect(num(await e.rows(`SELECT count FROM "empty".graphar_edge_types WHERE edge_type = 'created'`))).toEqual([{ count: 0 }]);
   });
 

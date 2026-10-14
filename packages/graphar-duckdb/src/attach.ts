@@ -69,8 +69,8 @@ export const VERTEX_INDEX_COL = '_graphArVertexIndex';
 export const SRC_INDEX_COL = '_graphArSrcIndex';
 export const DST_INDEX_COL = '_graphArDstIndex';
 
-/** The four relations the graph's information files become. */
-const METADATA = ['graphar_vertex_types', 'graphar_edge_types', 'graphar_properties', 'graphar_extra_info'] as const;
+/** The relations the graph's information files become, beside the views. */
+const METADATA = ['graphar_vertex_types', 'graphar_edge_types', 'graphar_properties', 'graphar_extra_info', 'graphar_chunks'] as const;
 
 const holders = new WeakMap<Engine, Map<string, number>>();
 
@@ -89,6 +89,7 @@ const vertexCount = (v: VertexInfo) => `${dir(v.prefix)}vertex_count`;
 const adjListChunk = (e: EdgeInfo, a: AdjacentList, p: number, k: number) => `${dir(e.prefix, a.prefix)}adj_list/part${p}/chunk${k}`;
 const edgePropertyChunk = (e: EdgeInfo, a: AdjacentList, g: PropertyGroup, p: number, k: number) =>
   `${dir(e.prefix, a.prefix, g.prefix)}part${p}/chunk${k}`;
+const offsetChunk = (e: EdgeInfo, a: AdjacentList, p: number) => `${dir(e.prefix, a.prefix)}offset/chunk${p}`;
 const edgeCount = (e: EdgeInfo, a: AdjacentList, p: number) => `${dir(e.prefix, a.prefix)}edge_count${p}`;
 const edgeVertexCount = (e: EdgeInfo, a: AdjacentList) => `${dir(e.prefix, a.prefix)}vertex_count`;
 
@@ -112,10 +113,11 @@ const propertyType = (p: Property, at: string): string =>
  * not SQL, and a column of nulls only has no type.
  */
 function relationOf(columns: readonly (readonly [string, string])[], rows: readonly (readonly string[])[]): string {
-  const empty = `SELECT ${columns.map(([c, t]) => `CAST(NULL AS ${t}) AS ${ident(c)}`).join(', ')} WHERE false`;
-  if (rows.length === 0) return empty;
-  const values = rows.map((r) => `(${r.join(', ')})`).join(', ');
-  return `${empty} UNION ALL BY NAME SELECT * FROM (VALUES ${values}) AS t(${columns.map(([c]) => ident(c)).join(', ')})`;
+  const typed = columns.map(([c, t]) => `CAST(${ident(c)} AS ${t}) AS ${ident(c)}`).join(', ');
+  const names = columns.map(([c]) => ident(c)).join(', ');
+  if (rows.length === 0) return `SELECT ${typed} FROM (SELECT ${columns.map(() => 'NULL').join(', ')}) AS t(${names}) WHERE false`;
+  // Each column is cast, so a literal keeps the type declared: an integer literal is not UBIGINT.
+  return `SELECT ${typed} FROM (VALUES ${rows.map((r) => `(${r.join(', ')})`).join(', ')}) AS t(${names})`;
 }
 
 /** One count file as an `int64` in SQL, or `NULL` when it is not 8 bytes: little-endian, so reversed into hex. */
@@ -125,7 +127,7 @@ const COUNT = `CASE WHEN octet_length(content) = 8
 /**
  * **Attach a GraphAr graph to the engine as the catalog `catalog`**: a view per vertex type,
  * `"<catalog>"."<type>"`, and per edge type, `"<catalog>"."<src_type>_<edge_type>_<dst_type>"`,
- * with GraphAr's own columns, and the information files as four relations.
+ * with GraphAr's own columns, and the information files as five relations.
  *
  * ```ts
  * await using g = await attachGraph(engine, 'job', (paths) => paths.map((p) => `${url}/${p}`), { entry: 'fossil.graph.yml' });
@@ -148,6 +150,11 @@ const COUNT = `CASE WHEN octet_length(content) = 8
  *   property; `type` is the vertex type or the edge type's `name`; `data_type` is GraphAr's word;
  *   `ordinal` is the column's place in the type's view after GraphAr's id columns, from 1.
  * - `graphar_extra_info(key, value)`: the graph document's `extra_info`, in order.
+ * - `graphar_chunks(type, kind, path)`: one row per Parquet chunk file the views read, in the order
+ *   vertex type, then edge type; `kind` is `vertex`, `offset`, `adj_list` or `edge_property`; `path` is
+ *   exactly the name `resolve` gave the file, so `parquet_metadata(path)` and
+ *   `parquet_kv_metadata(path)` read it. Only the edge type's first adjacency list is listed, with
+ *   its offset chunks if it is ordered.
  *
  * A graph `prefix` is read against the graph document's directory, where GraphAr's C++ library
  * reads a relative one against its working directory; without one, the data is under the document,
@@ -253,7 +260,11 @@ export async function attachGraph(
   const edgeFiles = edges.map((e, i) => {
     const a = e.adj_lists[0]!;
     const chunks = partCounts[i]!.flatMap((n, p) => Array.from({ length: Math.ceil(n / e.chunk_size) }, (_, k) => [p, k] as const));
+    const offsets = a.type.startsWith('ordered')
+      ? partCounts[i]!.map((_, p) => chunkPaths.push(root + offsetChunk(e, a, p)) - 1)
+      : [];
     return {
+      offsets,
       adj: chunks.map(([p, k]) => chunkPaths.push(root + adjListChunk(e, a, p, k)) - 1),
       groups: e.property_groups.map((g) => chunks.map(([p, k]) => chunkPaths.push(root + edgePropertyChunk(e, a, g, p, k)) - 1)),
     };
@@ -299,7 +310,20 @@ export async function attachGraph(
     }
     statements.push(viewOf(edgeName(e), sql));
   });
+  // One row per chunk file the views above read, by the name `resolve` gave it, and the offset
+  // chunks of the adjacency list they read: what `parquet_metadata(path)` takes.
+  const chunkRows: string[][] = [];
+  const chunk = (type: string, kind: string, index: number) => chunkRows.push([lit(type), lit(kind), lit(chunkNames[index]!)]);
+  vertices.forEach((v, i) => vertexFiles[i]!.forEach((g) => g.forEach((k) => chunk(v.type, 'vertex', k))));
+  edges.forEach((e, i) => {
+    const { offsets, adj, groups } = edgeFiles[i]!;
+    const name = edgeName(e);
+    offsets.forEach((k) => chunk(name, 'offset', k));
+    adj.forEach((k) => chunk(name, 'adj_list', k));
+    groups.forEach((g) => g.forEach((k) => chunk(name, 'edge_property', k)));
+  });
   statements.push(
+    viewOf('graphar_chunks', relationOf([['type', 'VARCHAR'], ['kind', 'VARCHAR'], ['path', 'VARCHAR']], chunkRows)),
     viewOf('graphar_vertex_types', relationOf(
       [['type', 'VARCHAR'], ['count', 'UBIGINT'], ['ordinal', 'INTEGER']],
       vertices.map((v, i) => [lit(v.type), String(vertexCounts[i]), String(i + 1)]),
