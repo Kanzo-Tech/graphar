@@ -9,7 +9,7 @@ builds for `wasm32-unknown-unknown`.
 | --- | --- |
 | [`graphar-info`](crates/graphar-info) | The information files: `GraphInfo`, `VertexInfo`, `EdgeInfo` and their parts, loaded from and dumped to YAML, and validated. No IO of its own |
 | [`graphar-parquet`](crates/graphar-parquet) | The data files in Parquet: vertex chunks, adjacency lists, offsets, edge properties and the count files, written and read through any [`object_store`](https://docs.rs/object_store). No runtime: its wasm32 build reaches no `tokio` |
-| [`@kanzo-tech/graphar-duckdb`](packages/graphar-duckdb) (npm) | `attachGraph`: a graph on a host's DuckDB as a catalog, a view per vertex and edge type over the Parquet chunks, and the information files as `graphar_vertex_types`, `graphar_edge_types`, `graphar_properties` and `graphar_extra_info`. TypeScript only: every file is read through the engine |
+| [`@kanzo-tech/graphar-duckdb`](packages/graphar-duckdb) (npm) | `attachGraph`: a graph on a host's DuckDB as a catalog, a view per vertex and edge type over the Parquet chunks, and the information files as `graphar_vertex_types`, `graphar_edge_types`, `graphar_properties`, `graphar_extra_info` and `graphar_chunks` (every chunk file, by the name the host resolved it to). TypeScript only: every file is read through the engine |
 
 They are tested against every information file and the Parquet data of
 [incubator-graphar-testing](https://github.com/apache/incubator-graphar-testing), and
