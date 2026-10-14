@@ -1,0 +1,31 @@
+type: person
+chunk_size: 3
+prefix: vertex/person/
+property_groups:
+  - prefix: id/
+    file_type: parquet
+    properties:
+      - name: id
+        data_type: int64
+        is_primary: true
+        is_nullable: false
+  - prefix: name_age_born_active/
+    file_type: parquet
+    properties:
+      - name: name
+        data_type: string
+        is_primary: false
+        is_nullable: false
+      - name: age
+        data_type: int32
+        is_primary: false
+        is_nullable: true
+      - name: born
+        data_type: date
+        is_primary: false
+        is_nullable: true
+      - name: active
+        data_type: bool
+        is_primary: false
+        is_nullable: true
+version: gar/v1

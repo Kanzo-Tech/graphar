@@ -9,9 +9,20 @@ license = "Apache-2.0"
 repository = "https://github.com/Kanzo-Tech/graphar"
 
 [workspace.dependencies]
+graphar-info = { path = "crates/graphar-info", version = "0.1.0-alpha.0" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
 thiserror = "2"
+# Arrow and Parquet at the major fossil links, so one copy reaches its build.
+arrow-array = "58"
+arrow-schema = "58"
+arrow-select = "58"
+# `arrow` only: a compression codec is the consumer's to turn on (`parquet/zstd`, …), and
+# `async`/`object_store` are off because both bring `tokio` into the wasm32 build.
+parquet = { version = "58", default-features = false, features = ["arrow"] }
+# No default features: `fs` and every cloud store bring `tokio`. The store is the caller's.
+object_store = { version = "0.13", default-features = false }
+bytes = "1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

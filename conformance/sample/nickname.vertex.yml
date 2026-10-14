@@ -1,0 +1,16 @@
+type: nickname
+chunk_size: 8
+prefix: vertex/nickname/
+property_groups:
+  - prefix: src_value/
+    file_type: parquet
+    properties:
+      - name: src
+        data_type: int64
+        is_primary: false
+        is_nullable: false
+      - name: value
+        data_type: string
+        is_primary: false
+        is_nullable: false
+version: gar/v1

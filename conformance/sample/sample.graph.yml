@@ -1,0 +1,12 @@
+name: sample
+vertices:
+  - person.vertex.yml
+  - software.vertex.yml
+  - nickname.vertex.yml
+edges:
+  - person_knows_person.edge.yml
+  - person_created_software.edge.yml
+version: gar/v1
+extra_info:
+  - key: written_by
+    value: graphar-parquet

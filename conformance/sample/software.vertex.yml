@@ -1,0 +1,24 @@
+type: software
+chunk_size: 2
+prefix: vertex/software/
+property_groups:
+  - prefix: id_name_price_released/
+    file_type: parquet
+    properties:
+      - name: id
+        data_type: int64
+        is_primary: true
+        is_nullable: false
+      - name: name
+        data_type: string
+        is_primary: false
+        is_nullable: false
+      - name: price
+        data_type: float
+        is_primary: false
+        is_nullable: true
+      - name: released
+        data_type: timestamp
+        is_primary: false
+        is_nullable: true
+version: gar/v1

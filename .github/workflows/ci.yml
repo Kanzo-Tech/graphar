@@ -25,4 +25,44 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked --no-fail-fast
       - name: wasm32
-        run: cargo check --target wasm32-unknown-unknown -p graphar-info --locked
+        run: cargo check --target wasm32-unknown-unknown -p graphar-info -p graphar-parquet --locked
+      - name: no tokio in the wasm32 build
+        run: |
+          if cargo tree --target wasm32-unknown-unknown -e normal --workspace --locked --prefix none \
+              | grep -E '^tokio '; then
+            echo "tokio reaches the wasm32 build" >&2
+            exit 1
+          fi
+      # GraphAr's own Parquet test data, read through graphar-parquet. The commit is the one
+      # graphar-info's fixtures were copied from.
+      - uses: actions/checkout@v4
+        with:
+          repository: apache/incubator-graphar-testing
+          ref: 8286724cd898047de833f0304dbddd2831afdf9f
+          path: incubator-graphar-testing
+          sparse-checkout: ldbc_sample/parquet
+      - name: GraphAr's testing data
+        env:
+          GRAPHAR_TESTING: ${{ github.workspace }}/incubator-graphar-testing
+        run: cargo test -p graphar-parquet --locked --test testing_data -- --ignored
+      # conformance/sample is what the C++ reader below and graphar-duckdb's tests open, and it is
+      # exactly what the writer writes today.
+      - name: conformance/sample is the writer's
+        run: |
+          rm -rf conformance/sample
+          cargo run -p graphar-parquet --example sample --locked -- conformance/sample
+          git add -N conformance/sample
+          git diff --exit-code --stat -- conformance/sample
+
+  # GraphAr's own C++ library opens what graphar-parquet wrote: `graphar` on PyPI is pybind11
+  # bindings over libgraphar (mini-yaml, Arrow C++), installed in seconds where a source build of
+  # Arrow C++ and GraphAr takes most of an hour.
+  cpp-reader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install graphar==0.13.0.dev1
+      - run: python conformance/read_cpp.py conformance/sample/sample.graph.yml
