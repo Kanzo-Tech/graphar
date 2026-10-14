@@ -1,0 +1,26 @@
+src_type: person
+edge_type: knows
+dst_type: person
+chunk_size: 4
+src_chunk_size: 3
+dst_chunk_size: 3
+prefix: edge/person_knows_person/
+directed: true
+adj_lists:
+  - ordered: true
+    aligned_by: src
+    prefix: ordered_by_source/
+    file_type: parquet
+  - ordered: false
+    aligned_by: dst
+    prefix: unordered_by_dest/
+    file_type: parquet
+property_groups:
+  - prefix: weight/
+    file_type: parquet
+    properties:
+      - name: weight
+        data_type: double
+        is_primary: false
+        is_nullable: true
+version: gar/v1

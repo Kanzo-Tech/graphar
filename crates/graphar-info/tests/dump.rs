@@ -79,22 +79,22 @@ type: Person
 chunk_size: 5
 prefix: vertex/Person/
 property_groups:
-- prefix: subject_name/
-  file_type: parquet
-  properties:
-  - name: subject
-    data_type: string
-    is_primary: true
-    is_nullable: false
-  - name: name
-    data_type: string
-    is_primary: false
-    is_nullable: false
-  - name: nickname
-    data_type: string
-    is_primary: false
-    is_nullable: true
-    cardinality: list
+  - prefix: subject_name/
+    file_type: parquet
+    properties:
+      - name: subject
+        data_type: string
+        is_primary: true
+        is_nullable: false
+      - name: name
+        data_type: string
+        is_primary: false
+        is_nullable: false
+      - name: nickname
+        data_type: string
+        is_primary: false
+        is_nullable: true
+        cardinality: list
 version: gar/v1
 ";
 
@@ -108,18 +108,18 @@ dst_chunk_size: 5
 prefix: edge/Person_knows_Person/
 directed: true
 adj_lists:
-- ordered: true
-  aligned_by: src
-  prefix: ordered_by_source/
-  file_type: parquet
+  - ordered: true
+    aligned_by: src
+    prefix: ordered_by_source/
+    file_type: parquet
 property_groups:
-- prefix: since/
-  file_type: parquet
-  properties:
-  - name: since
-    data_type: date
-    is_primary: false
-    is_nullable: true
+  - prefix: since/
+    file_type: parquet
+    properties:
+      - name: since
+        data_type: date
+        is_primary: false
+        is_nullable: true
 version: gar/v1
 ";
 
@@ -127,15 +127,15 @@ const FOSSIL: &str = "\
 name: fossil
 prefix: ./
 vertices:
-- Person.vertex.yml
+  - Person.vertex.yml
 edges:
-- Person_knows_Person.edge.yml
+  - Person_knows_Person.edge.yml
 version: gar/v1
 extra_info:
-- key: rml
-  value: mapping.ttl
-- key: shacl
-  value: shapes.ttl
+  - key: rml
+    value: mapping.ttl
+  - key: shacl
+    value: shapes.ttl
 ";
 
 #[test]

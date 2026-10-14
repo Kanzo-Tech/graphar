@@ -1,0 +1,14 @@
+src_type: person
+edge_type: created
+dst_type: software
+chunk_size: 4
+src_chunk_size: 3
+dst_chunk_size: 2
+prefix: edge/person_created_software/
+directed: true
+adj_lists:
+  - ordered: true
+    aligned_by: src
+    prefix: ordered_by_source/
+    file_type: parquet
+version: gar/v1

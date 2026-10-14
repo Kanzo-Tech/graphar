@@ -1,0 +1,32 @@
+[package]
+name = "graphar-parquet"
+version = "0.1.0-alpha.0"
+description = "Apache GraphAr's data files in Parquet: vertex and edge chunks, offsets and counts, written and read through any object_store. Builds for wasm32."
+keywords = ["graphar", "graph", "property-graph", "parquet"]
+categories = ["data-structures", "encoding", "wasm"]
+readme = "../../README.md"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+graphar-info.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+arrow-select.workspace = true
+parquet.workspace = true
+object_store.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The tests drive the async API with a plain executor: the crate itself needs no runtime.
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+# `snap` reads GraphAr's own test data, and `zstd` is what fossil writes with.
+parquet = { workspace = true, features = ["snap", "zstd"] }
+# `fs` for the example that writes the conformance graph to a directory.
+object_store = { workspace = true, features = ["fs"] }
+
+[lints]
+workspace = true
