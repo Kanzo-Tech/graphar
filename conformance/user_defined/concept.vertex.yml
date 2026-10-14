@@ -1,0 +1,17 @@
+type: concept
+chunk_size: 4
+prefix: vertex/concept/
+property_groups:
+  - prefix: id_labels/
+    file_type: parquet
+    properties:
+      - name: id
+        data_type: int64
+        is_primary: true
+        is_nullable: false
+      - name: labels
+        data_type: langString
+        is_primary: false
+        is_nullable: true
+        cardinality: set
+version: gar/v1 (langString)

@@ -14,8 +14,13 @@
 - **YAML is `serde_yaml_ng`.** `serde_yml` is banned (RUSTSEC-2025-0068).
 - `tests/fixtures/` are vendored unchanged; their source commit is in the README there. Do not edit
   them. A fixture we refuse is listed with the reason in the test that refuses it.
-- `conformance/sample/` is written by `cargo run -p graphar-parquet --example sample --
-  conformance/sample`, never by hand; CI rewrites it and fails on a difference.
+- `conformance/sample/` and `conformance/user_defined/` are written by `cargo run -p graphar-parquet
+  --example sample -- conformance`, never by hand; CI rewrites them and fails on a difference.
+- **Formal correctness.** Where the specification is explicit, follow it to the letter; where it is
+  silent, follow the C++ library and say so. Every departure carries a comment quoting the exact
+  specification sentence, and anything non-standard (a user-defined type's Arrow type) is declared
+  through the format's own extension point (the version's `gar/v1 (name)`) and the caller, never
+  assumed.
 - Before pushing: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`,
   `cargo check --target wasm32-unknown-unknown -p graphar-info -p graphar-parquet`, and

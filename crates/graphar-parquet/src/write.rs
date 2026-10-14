@@ -13,7 +13,7 @@ use object_store::{ObjectStore, PutOptions, PutPayload, path::Path};
 use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
 
 use crate::error::{Error, invalid};
-use crate::types::holds_property;
+use crate::types::{Options, UserTypes, holds_property};
 use crate::{DST_INDEX_COL, OFFSET_COL, SRC_INDEX_COL, VERTEX_INDEX_COL, paths};
 
 /// `root` joined with a path from [`paths`].
@@ -93,13 +93,14 @@ fn group_columns(
     at: &str,
     batch: &RecordBatch,
     group: &PropertyGroup,
+    user: &UserTypes,
 ) -> Result<Vec<(Field, ArrayRef)>, Error> {
     group
         .properties
         .iter()
         .map(|p: &Property| {
             let array = column(at, batch, &p.name)?;
-            if !holds_property(p, array.data_type()) {
+            if !holds_property(p, array.data_type(), user) {
                 return Err(invalid(
                     format!("{at}, property `{}`", p.name),
                     format!(
@@ -143,7 +144,8 @@ fn chunks(count: u64, chunk_size: u64) -> u64 {
 /// holds a column per property, by name; other columns are not read. Each chunk of each group is
 /// `_graphArVertexIndex` (`int64`, the id) then the group's properties, in the information file's
 /// order and nullability. A property's column must hold its GraphAr type, and one that is not
-/// nullable must hold no null.
+/// nullable must hold no null. A property of a user-defined type (`gar/v1 (langString)`) must be
+/// held by the Arrow type `options.user_types` gives its name, which GraphAr does not define.
 ///
 /// It writes no information file: [`write_info`] does, once every table is written.
 pub async fn write_vertices(
@@ -151,7 +153,7 @@ pub async fn write_vertices(
     root: &Path,
     info: &VertexInfo,
     batches: &[RecordBatch],
-    props: &WriterProperties,
+    options: &Options,
 ) -> Result<u64, Error> {
     info.validate()?;
     let at = format!("vertex `{}`", info.r#type);
@@ -162,7 +164,7 @@ pub async fn write_vertices(
     let count = table.num_rows() as u64;
     let mut checked = Vec::with_capacity(info.property_groups.len());
     for group in &info.property_groups {
-        checked.push(group_columns(&at, &table, group)?);
+        checked.push(group_columns(&at, &table, group, &options.user_types)?);
     }
     for k in 0..chunks(count, info.chunk_size) {
         let begin = k * info.chunk_size;
@@ -178,7 +180,7 @@ pub async fn write_vertices(
                 }),
             );
             let path = paths::vertex_chunk(info, group, k);
-            put_parquet(store, root, &path, &batch_of(chunk)?, props).await?;
+            put_parquet(store, root, &path, &batch_of(chunk)?, &options.props).await?;
         }
     }
     put_count(store, root, &paths::vertex_count(info), count).await?;
@@ -191,7 +193,7 @@ pub async fn write_vertices(
 /// `vertex_count` is the number of vertices the list is aligned by: the source type's for a list
 /// by source, the destination type's for one by destination. A batch holds `_graphArSrcIndex` and
 /// `_graphArDstIndex` (`int64`, no null: internal ids of the source and destination types) and a
-/// column per edge property, by name.
+/// column per edge property, by name. `options` is as for [`write_vertices`].
 ///
 /// The edges are partitioned by the vertex chunk of their aligned end, a part per vertex chunk,
 /// and each part is cut into chunks of `chunk_size` edges. Within a part an ordered list is sorted
@@ -201,11 +203,17 @@ pub async fn write_vertices(
 /// chunk: `_graphArOffset`, `int64`, one row per vertex of the vertex chunk plus one, counted from
 /// the part's first edge, the first always 0. Then the list's `vertex_count`.
 ///
-/// The last offset chunk is as long as the last vertex chunk, plus one: "the partition of the
-/// offset table should be in alignment with the partition of the corresponding vertex table"
-/// (format.md, "Physical table of edges"), and `ldbc_sample/parquet` of GraphAr's testing data is
-/// written so. C++'s `EdgesBuilder` and Spark's `EdgeWriter` pad it to `chunk_size + 1` rows
-/// instead; their readers index it by vertex and read either.
+/// **A departure from C++, for the specification.** The last offset chunk is as long as the last
+/// vertex chunk, plus one. The specification says: "The partition of the offset table should be in
+/// alignment with the partition of the corresponding vertex table. The first row of each offset
+/// chunk is always 0" (format.md, "Physical table of edges"); it does not give the length, and
+/// `ldbc_sample/parquet` of GraphAr's testing data is written so. C++'s `EdgesBuilder` and Spark's
+/// `EdgeWriter` pad it to `chunk_size + 1` rows instead; their readers index it by vertex and read
+/// either.
+///
+/// Where the specification is silent, C++ is followed: the file names (`paths`), the count files
+/// (one little-endian `int64`, as C++ writes it in memory on its platforms), and a count and an
+/// offset chunk for every part, empty or not (`EdgesBuilder::Dump`).
 pub async fn write_edges(
     store: &dyn ObjectStore,
     root: &Path,
@@ -213,7 +221,7 @@ pub async fn write_edges(
     adj_list_type: AdjListType,
     vertex_count: u64,
     batches: &[RecordBatch],
-    props: &WriterProperties,
+    options: &Options,
 ) -> Result<u64, Error> {
     info.validate()?;
     let at = format!("edge `{}`, {adj_list_type}", info.triple());
@@ -269,7 +277,7 @@ pub async fn write_edges(
     ];
     let mut grouped = Vec::with_capacity(info.property_groups.len());
     for group in &info.property_groups {
-        let checked = group_columns(&at, &table, group)?;
+        let checked = group_columns(&at, &table, group, &options.user_types)?;
         grouped.push(checked.len());
         columns.extend(checked);
     }
@@ -314,7 +322,7 @@ pub async fn write_edges(
                 root,
                 &paths::offset_chunk(info, adj, part),
                 &batch,
-                props,
+                &options.props,
             )
             .await?;
         }
@@ -327,7 +335,7 @@ pub async fn write_edges(
                 root,
                 &paths::adj_list_chunk(info, adj, part, chunk),
                 &adj_list,
-                props,
+                &options.props,
             )
             .await?;
             let mut column = 2;
@@ -335,7 +343,14 @@ pub async fn write_edges(
                 let projection: Vec<usize> = (column..column + width).collect();
                 column += width;
                 let path = paths::edge_property_chunk(info, adj, group, part, chunk);
-                put_parquet(store, root, &path, &rows.project(&projection)?, props).await?;
+                put_parquet(
+                    store,
+                    root,
+                    &path,
+                    &rows.project(&projection)?,
+                    &options.props,
+                )
+                .await?;
             }
         }
         begin = end;

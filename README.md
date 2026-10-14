@@ -26,6 +26,33 @@ graphar_parquet::write_vertices(&store, &root, &graph.vertices[0], &batches, &pr
 graphar_parquet::write_info(&store, &root, &graph).await?;
 ```
 
+## Where this departs from GraphAr's C++ library
+
+The specification comes first, C++ where it is silent, and each departure is commented at the code
+with the sentence it follows. The one that matters to a reader is **user-defined types**. The
+specification says: "GraphAr also supports the user-defined data types, which can be used to
+represent complex data structures, such as the struct, map, and union types" (format.md,
+"Property Data Types"), and C++ implements the declaration (`gar/v1 (langString)`) but not the type:
+its `DataType::TypeNameToDataType` throws "Unsupported data type" on any name outside a fixed list,
+so `GraphInfo::Load` fails for the whole graph. It fails the same way for `time`, which the
+specification lists. These crates follow the specification:
+
+- `graphar-info` reads and writes `data_type: langString` with `cardinality: set` and requires the
+  version to declare `langString`. The list is the cardinality's: C++'s writer wraps every property
+  that is not `single` in an Arrow list, so also writing `list<…>` would wrap it twice.
+- `graphar-parquet` takes the Arrow type of each user-defined type from the caller
+  (`UserTypes`), because the specification defines none; a column must match it exactly. `langString`
+  as `STRUCT<value: STRING, lang: STRING>` is stored as Parquet `LIST<STRUCT<value, lang>>`.
+- `graphar-duckdb` reads the Parquet types as they are (a DuckDB `STRUCT(value VARCHAR, lang
+  VARCHAR)[]`), and needs `userTypes` only to type a view that has no rows.
+
+`graphar-info` still carries `time`, which the specification lists; a writer that wants a reader
+to open the graph writes such a value as `string`, since neither C++ nor Java accepts `time`.
+
+`conformance/user_defined/` is such a graph and `conformance/read_cpp.py` records what C++ does with
+it: it refuses it, and the check fails the day C++ opens it. `conformance/sample/`, which C++ opens
+and reads, has no such column.
+
 ## Releasing
 
 A release is a GitHub Release, and its body is the release notes: there is no CHANGELOG. The tag

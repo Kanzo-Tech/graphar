@@ -394,6 +394,7 @@ name = "graphar-parquet"
 version = "0.1.0-alpha.0"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "arrow-schema",
  "arrow-select",
  "bytes",

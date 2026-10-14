@@ -29,6 +29,8 @@ mod read;
 mod types;
 mod write;
 
+pub use types::{Options, UserTypes};
+
 pub use error::Error;
 pub use read::{
     read_adj_list_chunk, read_count, read_edge_property_chunk, read_offsets, read_vertex_chunk,

@@ -8,21 +8,24 @@
 
 #![allow(dead_code, missing_docs)]
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow_array::{
     ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    RecordBatch, StringArray, TimestampMillisecondArray,
+    ListArray, RecordBatch, StringArray, StructArray, TimestampMillisecondArray,
 };
+use arrow_buffer::{NullBuffer, OffsetBuffer};
+use arrow_schema::{DataType as Arrow, Field, Fields};
 use graphar_info::{
     AdjListType, AdjacentList, Cardinality, DataType, EdgeInfo, FileType, GraphInfo, InfoVersion,
     Property, PropertyGroup, VertexInfo,
 };
 use graphar_parquet::{
-    DST_INDEX_COL, Error, SRC_INDEX_COL, write_edges, write_info, write_vertices,
+    DST_INDEX_COL, Error, Options, SRC_INDEX_COL, UserTypes, write_edges, write_info,
+    write_vertices,
 };
 use object_store::{ObjectStore, path::Path};
-use parquet::file::properties::WriterProperties;
 
 pub fn property(name: &str, data_type: DataType, is_primary: bool, is_nullable: bool) -> Property {
     Property {
@@ -296,12 +299,41 @@ pub fn created_rows() -> RecordBatch {
 
 /// Writes the whole sample under `root`, the graph document last.
 pub async fn write(store: &dyn ObjectStore, root: &Path) -> Result<(), Error> {
-    let props = WriterProperties::default();
-    write_vertices(store, root, &person(), &[person_rows()], &props).await?;
-    write_vertices(store, root, &software(), &[software_rows()], &props).await?;
-    write_vertices(store, root, &nickname(), &[nickname_rows()], &props).await?;
+    write_vertices(
+        store,
+        root,
+        &person(),
+        &[person_rows()],
+        &Options::default(),
+    )
+    .await?;
+    write_vertices(
+        store,
+        root,
+        &software(),
+        &[software_rows()],
+        &Options::default(),
+    )
+    .await?;
+    write_vertices(
+        store,
+        root,
+        &nickname(),
+        &[nickname_rows()],
+        &Options::default(),
+    )
+    .await?;
     for adj in [AdjListType::OrderedBySource, AdjListType::UnorderedByDest] {
-        write_edges(store, root, &knows(), adj, 7, &[knows_rows()], &props).await?;
+        write_edges(
+            store,
+            root,
+            &knows(),
+            adj,
+            7,
+            &[knows_rows()],
+            &Options::default(),
+        )
+        .await?;
     }
     write_edges(
         store,
@@ -310,8 +342,117 @@ pub async fn write(store: &dyn ObjectStore, root: &Path) -> Result<(), Error> {
         AdjListType::OrderedBySource,
         7,
         &[created_rows()],
-        &props,
+        &Options::default(),
     )
     .await?;
     write_info(store, root, &graph()).await
+}
+
+// ---------------------------------------------------------------------------------------------
+// `user_defined`: a graph whose one property is a list of a user-defined type. The specification
+// allows it ("GraphAr also supports the user-defined data types, which can be used to represent
+// complex data structures, such as the struct, map, and union types", format.md, "Property Data
+// Types"); GraphAr's C++ library refuses to open it (`conformance/read_cpp.py` says how). It is a
+// graph of its own so that `sample`, which C++ opens, stays the C++ reader's check.
+// ---------------------------------------------------------------------------------------------
+
+/// The user-defined type of the graph, declared by its version: `gar/v1 (langString)`.
+pub const LANG_STRING: &str = "langString";
+
+/// The Arrow type the caller gives `langString`: `STRUCT<value: STRING, lang: STRING>`.
+pub fn user_types() -> UserTypes {
+    let fields = Fields::from(vec![
+        Field::new("value", Arrow::Utf8, false),
+        Field::new("lang", Arrow::Utf8, false),
+    ]);
+    BTreeMap::from([(LANG_STRING.to_owned(), Arrow::Struct(fields))])
+}
+
+pub fn declaring() -> InfoVersion {
+    InfoVersion {
+        version: 1,
+        user_define_types: vec![LANG_STRING.to_owned()],
+    }
+}
+
+pub fn concept() -> VertexInfo {
+    VertexInfo {
+        r#type: "concept".to_owned(),
+        chunk_size: 4,
+        prefix: "vertex/concept/".to_owned(),
+        labels: Vec::new(),
+        property_groups: vec![group(
+            "id_labels/",
+            vec![
+                property("id", DataType::Int64, true, false),
+                // One level of list, from the cardinality: a non-single property is an Arrow list
+                // (C++ `VertexPropertyWriter::validate` wraps it in `arrow::list`), so the type is
+                // not itself a `list<…>`.
+                Property {
+                    cardinality: Cardinality::Set,
+                    ..property(
+                        "labels",
+                        DataType::UserDefined(LANG_STRING.to_owned()),
+                        false,
+                        true,
+                    )
+                },
+            ],
+        )],
+        version: declaring(),
+    }
+}
+
+pub fn user_defined_graph() -> GraphInfo {
+    GraphInfo {
+        name: "user_defined".to_owned(),
+        prefix: None,
+        vertices: vec![concept()],
+        edges: Vec::new(),
+        labels: Vec::new(),
+        version: declaring(),
+        extra_info: Vec::new(),
+    }
+}
+
+/// Three concepts: two labels in two languages, none, and a null list.
+pub fn concept_rows() -> RecordBatch {
+    let item = user_types().remove(LANG_STRING).unwrap();
+    let Arrow::Struct(fields) = item.clone() else {
+        unreachable!()
+    };
+    let values = StructArray::new(
+        fields,
+        vec![
+            Arc::new(StringArray::from(vec!["cat", "gato"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["en", "es"])),
+        ],
+        None,
+    );
+    let labels = ListArray::new(
+        Arc::new(Field::new("item", item, false)),
+        OffsetBuffer::new(vec![0, 2, 2, 2].into()),
+        Arc::new(values),
+        Some(NullBuffer::from(vec![true, true, false])),
+    );
+    batch(vec![
+        ("id", Arc::new(Int64Array::from_iter_values([1, 2, 3]))),
+        ("labels", Arc::new(labels)),
+    ])
+}
+
+/// Writes the `user_defined` graph under `root`, the graph document last.
+pub async fn write_user_defined(store: &dyn ObjectStore, root: &Path) -> Result<(), Error> {
+    write_vertices(
+        store,
+        root,
+        &concept(),
+        &[concept_rows()],
+        &Options {
+            user_types: user_types(),
+            ..Options::default()
+        },
+    )
+    .await?;
+    write_info(store, root, &user_defined_graph()).await
 }

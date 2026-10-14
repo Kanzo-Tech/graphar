@@ -9,11 +9,23 @@ own type dispatch (`TryToCastToAny`, `graph_reader.cc`) — a type it does not h
 The expected values are `crates/graphar-parquet/tests/sample/mod.rs`, restated: this file is the
 oracle, so it does not read them from the writer it checks.
 
-    python conformance/read_cpp.py conformance/sample/sample.graph.yml
+    python conformance/read_cpp.py conformance
+
+Two graphs are under it. `sample` is opened and read. `user_defined` has a property typed
+`data_type: langString` with `cardinality: set`, `langString` being declared by the graph's version,
+`gar/v1 (langString)`; on disk one Parquet `LIST<STRUCT<value: STRING, lang: STRING>>`: the
+specification allows it ("GraphAr also supports the user-defined data types, which can be used to
+represent complex data structures, such as the struct, map, and union types", format.md,
+"Property Data Types"), and C++ v0.13.0 does not. Its `DataType::TypeNameToDataType` (`types.cc`)
+throws "Unsupported data type" on any name outside a fixed list, so `GraphInfo::Load` fails for the
+whole graph: not a skipped column, not an unreadable chunk. The check below expects exactly that,
+so the day C++ opens such a graph this fails and says so.
 """
 
 import os
+import shutil
 import sys
+import tempfile
 
 import graphar
 from graphar._core import AdjListType
@@ -33,7 +45,7 @@ def valid(vertex, names):
     return [vertex.IsValid(n) for n in names]
 
 
-def main(path):
+def sample(path):
     g = graphar.GraphInfo.load(os.path.abspath(path))
     check("graph is validated", g.is_validated(), True)
     check("graph name", g.get_name(), "sample")
@@ -79,6 +91,39 @@ def main(path):
     # `find_src` reads the offset chunk of the source's part.
     it = created.find_src(6, created.begin())
     check("created find_src(6) through the offsets", (it.source(), it.destination()), (6, 2))
+
+
+def refused(graph, what, message):
+    try:
+        graphar.GraphInfo.load(os.path.abspath(graph))
+    except RuntimeError as e:
+        check(what, str(e), message)
+        return
+    sys.exit(f"{what}: C++ opened the graph; the specification-conformant reading now holds, "
+             "update the conformance case")
+
+
+def user_defined(root):
+    graph = os.path.join(root, "user_defined", "user_defined.graph.yml")
+    refused(graph, "C++ on langString, declared by the version, with cardinality set",
+            "Unsupported data type langString")
+    # Controls on a copy: the refusal is C++'s list of type names, not the cardinality and not the
+    # version's declaration. `time` is a type the specification lists and C++ refuses the same way.
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = os.path.join(tmp, "g")
+        shutil.copytree(os.path.join(root, "user_defined"), copy)
+        vertex = os.path.join(copy, "concept.vertex.yml")
+        original = open(vertex).read()
+        open(vertex, "w").write(original.replace("data_type: langString", "data_type: string"))
+        g = graphar.GraphInfo.load(os.path.join(copy, "user_defined.graph.yml"))
+        check("C++ on string with cardinality set loads", g.get_vertex_info("concept").get_property_cardinality("labels").name, "SET")
+        open(vertex, "w").write(original.replace("data_type: langString", "data_type: time"))
+        refused(os.path.join(copy, "user_defined.graph.yml"), "C++ on time", "Unsupported data type time")
+
+
+def main(root):
+    sample(os.path.join(root, "sample", "sample.graph.yml"))
+    user_defined(root)
 
 
 if __name__ == "__main__":

@@ -10,11 +10,11 @@ use arrow_schema::DataType as Arrow;
 use futures::executor::block_on;
 use graphar_info::{AdjListType, DataType, FileType, GraphInfo};
 use graphar_parquet::{
-    DST_INDEX_COL, Error, SRC_INDEX_COL, VERTEX_INDEX_COL, paths, read_adj_list_chunk, read_count,
-    read_edge_property_chunk, read_offsets, read_vertex_chunk, write_edges, write_vertices,
+    DST_INDEX_COL, Error, Options, SRC_INDEX_COL, VERTEX_INDEX_COL, paths, read_adj_list_chunk,
+    read_count, read_edge_property_chunk, read_offsets, read_vertex_chunk, write_edges,
+    write_vertices,
 };
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
-use parquet::file::properties::WriterProperties;
 
 fn written() -> (InMemory, Path) {
     let store = InMemory::new();
@@ -272,7 +272,7 @@ fn refused(result: Result<u64, Error>) -> String {
 fn a_column_that_does_not_match_the_information_file_is_refused() {
     let store = InMemory::new();
     let root = Path::from("g");
-    let props = WriterProperties::default();
+
     let person = sample::person();
     let rows = sample::person_rows();
 
@@ -283,7 +283,7 @@ fn a_column_that_does_not_match_the_information_file_is_refused() {
         &root,
         &person,
         &[wrong],
-        &props,
+        &Options::default(),
     )));
     assert!(e.contains("property `age`") && e.contains("int32"), "{e}");
 
@@ -303,7 +303,7 @@ fn a_column_that_does_not_match_the_information_file_is_refused() {
         &root,
         &person,
         &[with_null],
-        &props,
+        &Options::default(),
     )));
     assert!(e.contains("not nullable"), "{e}");
 
@@ -313,7 +313,7 @@ fn a_column_that_does_not_match_the_information_file_is_refused() {
         &root,
         &person,
         &[rows.project(&[0]).unwrap()],
-        &props,
+        &Options::default(),
     )));
     assert!(e.contains("no column `name`"), "{e}");
 }
@@ -321,7 +321,7 @@ fn a_column_that_does_not_match_the_information_file_is_refused() {
 #[test]
 fn an_edge_beyond_the_vertex_count_is_refused() {
     let store = InMemory::new();
-    let props = WriterProperties::default();
+
     let e = refused(block_on(write_edges(
         &store,
         &Path::from("g"),
@@ -329,7 +329,7 @@ fn an_edge_beyond_the_vertex_count_is_refused() {
         AdjListType::OrderedBySource,
         3,
         &[sample::knows_rows()],
-        &props,
+        &Options::default(),
     )));
     assert!(e.contains("not below the vertex count, 3"), "{e}");
     let e = refused(block_on(write_edges(
@@ -339,7 +339,7 @@ fn an_edge_beyond_the_vertex_count_is_refused() {
         AdjListType::OrderedByDest,
         7,
         &[sample::knows_rows()],
-        &props,
+        &Options::default(),
     )));
     assert!(e.contains("no such adjacency list"), "{e}");
 }
@@ -354,7 +354,7 @@ fn only_parquet_is_written() {
         &Path::from("g"),
         &person,
         &[sample::person_rows()],
-        &WriterProperties::default(),
+        &Options::default(),
     )));
     assert!(e.contains("`csv` is not Parquet"), "{e}");
 }
@@ -370,7 +370,7 @@ fn a_dot_prefix_is_not_a_path() {
         &Path::from("g"),
         &person,
         &[sample::person_rows()],
-        &WriterProperties::default(),
+        &Options::default(),
     )));
     assert!(e.contains("Path \"./vertex/person/id/chunk0\""), "{e}");
 }
@@ -402,7 +402,7 @@ fn a_list_property_is_an_arrow_list() {
         &root,
         &v,
         &[rows],
-        &WriterProperties::default(),
+        &Options::default(),
     ))
     .unwrap();
     assert_eq!(n, 3);
@@ -418,4 +418,99 @@ fn a_list_property_is_an_arrow_list() {
         back[0].schema().field(2).data_type(),
         Arrow::List(_)
     ));
+}
+
+#[test]
+fn a_list_of_a_user_defined_struct_is_a_parquet_list_of_struct() {
+    use arrow_array::{ListArray, StructArray};
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+    let store = InMemory::new();
+    let root = Path::from("g");
+    block_on(sample::write_user_defined(&store, &root)).unwrap();
+    let concept = sample::concept();
+    let group = &concept.property_groups[0];
+
+    // The file: `labels` is LIST<STRUCT<value: STRING, lang: STRING>> in Parquet's own schema.
+    let relative = Path::from(paths::vertex_chunk(&concept, group, 0));
+    let path: Path = root.parts().chain(relative.parts()).collect();
+    let bytes = block_on(async { store.get(&path).await.unwrap().bytes().await.unwrap() });
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+    let leaves: Vec<String> = builder
+        .metadata()
+        .file_metadata()
+        .schema_descr()
+        .columns()
+        .iter()
+        .map(|c| c.path().string())
+        .collect();
+    assert_eq!(leaves.len(), 4);
+    assert_eq!(leaves[0], VERTEX_INDEX_COL.to_owned());
+    assert_eq!(leaves[1], "id");
+    // Parquet's own LIST nesting, then the struct's two leaves.
+    assert!(
+        leaves[2].starts_with("labels.") && leaves[2].ends_with(".value"),
+        "{leaves:?}"
+    );
+    assert!(
+        leaves[3].starts_with("labels.") && leaves[3].ends_with(".lang"),
+        "{leaves:?}"
+    );
+
+    // The read back: the values, the empty list and the null list.
+    let back = block_on(read_vertex_chunk(&store, &root, &concept, group, 0)).unwrap();
+    let labels = back[0].column_by_name("labels").unwrap();
+    assert_eq!(
+        labels.data_type(),
+        sample::concept_rows().column(1).data_type()
+    );
+    let list = labels.as_any().downcast_ref::<ListArray>().unwrap();
+    assert!(list.is_null(2));
+    assert_eq!(list.value(1).len(), 0);
+    let first = list.value(0);
+    let pairs = first.as_any().downcast_ref::<StructArray>().unwrap();
+    let text = |name: &str| {
+        let c = pairs.column_by_name(name).unwrap();
+        let c = c.as_any().downcast_ref::<StringArray>().unwrap();
+        c.iter().map(|s| s.unwrap().to_owned()).collect::<Vec<_>>()
+    };
+    assert_eq!(text("value"), ["cat", "gato"]);
+    assert_eq!(text("lang"), ["en", "es"]);
+}
+
+#[test]
+fn a_user_defined_type_is_held_only_by_the_arrow_type_the_caller_gave() {
+    let store = InMemory::new();
+    let root = Path::from("g");
+
+    let concept = sample::concept();
+    let rows = sample::concept_rows();
+
+    // No Arrow type for the name: nothing can hold it.
+    let e = refused(block_on(write_vertices(
+        &store,
+        &root,
+        &concept,
+        std::slice::from_ref(&rows),
+        &Options::default(),
+    )));
+    assert!(
+        e.contains("property `labels`") && e.contains("`langString`"),
+        "{e}"
+    );
+
+    // A different one.
+    let mut other = sample::user_types();
+    other.insert("langString".to_owned(), Arrow::Utf8);
+    let e = refused(block_on(write_vertices(
+        &store,
+        &root,
+        &concept,
+        &[rows],
+        &Options {
+            user_types: other,
+            ..Options::default()
+        },
+    )));
+    assert!(e.contains("property `labels`"), "{e}");
 }

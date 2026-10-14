@@ -1,0 +1,4 @@
+name: user_defined
+vertices:
+  - concept.vertex.yml
+version: gar/v1 (langString)

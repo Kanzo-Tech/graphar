@@ -13,6 +13,7 @@ import { attachGraph, GraphArError, type Resolve } from '../src/index.js';
 import { engine } from './engine.js';
 
 const SAMPLE = resolvePath(import.meta.dirname, '../../../conformance/sample');
+const USER_DEFINED = resolvePath(import.meta.dirname, '../../../conformance/user_defined');
 const under = (dir: string): Resolve => (paths) => paths.map((p) => `${dir}/${p}`);
 const entry = 'sample.graph.yml';
 
@@ -20,10 +21,10 @@ const temporary: string[] = [];
 afterAll(() => Promise.all(temporary.map((d) => rm(d, { recursive: true, force: true }))));
 
 /** A copy of the sample, with `edit` applied to one of its documents. */
-async function copy(file: string, edit: (text: string) => string): Promise<string> {
+async function copy(file: string, edit: (text: string) => string, from = SAMPLE): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'graphar-duckdb-'));
   temporary.push(dir);
-  await cp(SAMPLE, dir, { recursive: true });
+  await cp(from, dir, { recursive: true });
   await writeFile(join(dir, file), edit(await readFile(join(dir, file), 'utf8')));
   return dir;
 }
@@ -122,7 +123,7 @@ describe('attachGraph over the sample', async () => {
     ]);
     expect(await columns('graphar_properties')).toEqual([
       ['type', 'VARCHAR'], ['property', 'VARCHAR'], ['data_type', 'VARCHAR'], ['is_primary', 'BOOLEAN'], ['is_nullable', 'BOOLEAN'],
-      ['ordinal', 'INTEGER'],
+      ['ordinal', 'INTEGER'], ['cardinality', 'VARCHAR'],
     ]);
     expect(await columns('graphar_extra_info')).toEqual([['key', 'VARCHAR'], ['value', 'VARCHAR']]);
     expect(await columns('graphar_chunks')).toEqual([['type', 'VARCHAR'], ['kind', 'VARCHAR'], ['path', 'VARCHAR']]);
@@ -239,5 +240,50 @@ describe('attachGraph', () => {
     const reason = new Error('stopped');
     const attaching = attachGraph(e, 'stopped', (paths) => (stop.abort(reason), under(SAMPLE)(paths)), { entry, signal: stop.signal });
     await expect(attaching).rejects.toBe(reason);
+  });
+});
+
+describe('attachGraph over user_defined: a list of a user-defined type', () => {
+  // `gar/v1 (langString)` declares the type; GraphAr gives it no storage. graphar-parquet wrote it
+  // as LIST<STRUCT<value: STRING, lang: STRING>>, and the view reads that from the file.
+  const user = 'user_defined.graph.yml';
+
+  it('reads the column as a DuckDB LIST of STRUCT, and says its type in GraphAr\'s words', async () => {
+    const e = await engine();
+    await using g = await attachGraph(e, 'u', under(USER_DEFINED), { entry: user });
+    expect(g.graph.version).toBe('gar/v1 (langString)');
+    const types = await e.rows(`SELECT column_name, column_type FROM (DESCRIBE "u"."concept")`);
+    expect(types).toEqual([
+      { column_name: '_graphArVertexIndex', column_type: 'BIGINT' },
+      { column_name: 'id', column_type: 'BIGINT' },
+      { column_name: 'labels', column_type: 'STRUCT("value" VARCHAR, lang VARCHAR)[]' },
+    ]);
+    const rows = await e.rows(`SELECT id::INTEGER AS id, labels FROM "u"."concept" ORDER BY id`);
+    expect(rows).toEqual([
+      { id: 1, labels: [{ value: 'cat', lang: 'en' }, { value: 'gato', lang: 'es' }] },
+      { id: 2, labels: [] },
+      { id: 3, labels: null },
+    ]);
+    expect(
+      await e.rows(`SELECT unnest(labels).lang AS lang FROM "u"."concept" WHERE id = 1 ORDER BY ALL`),
+    ).toEqual([{ lang: 'en' }, { lang: 'es' }]);
+    expect(await e.rows(`SELECT property, data_type, is_nullable, cardinality FROM "u".graphar_properties ORDER BY ordinal`)).toEqual([
+      { property: 'id', data_type: 'int64', is_nullable: false, cardinality: 'single' },
+      { property: 'labels', data_type: 'langString', is_nullable: true, cardinality: 'set' },
+    ]);
+  });
+
+  it('types an empty view only if the host says what the user-defined type is', async () => {
+    const dir = await copy('concept.vertex.yml', (t) => t, USER_DEFINED);
+    await writeFile(join(dir, 'vertex/concept/vertex_count'), Buffer.alloc(8));
+    const e = await engine();
+    const without = attachGraph(e, 'u', under(dir), { entry: user });
+    await expect(without).rejects.toMatchObject({ code: 'unsupported', message: expect.stringMatching(/`langString` has no DuckDB type/) });
+
+    const userTypes = { langString: 'STRUCT(value VARCHAR, lang VARCHAR)' };
+    await using _g = await attachGraph(e, 'u', under(dir), { entry: user, userTypes });
+    expect(await e.rows(`SELECT column_type FROM (DESCRIBE "u"."concept") WHERE column_name = 'labels'`)).toEqual([
+      { column_type: 'STRUCT("value" VARCHAR, lang VARCHAR)[]' },
+    ]);
   });
 });
