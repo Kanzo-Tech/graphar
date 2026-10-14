@@ -1,0 +1,6 @@
+vertices:
+  - Person.vertex.yml
+name: LdbcSample
+edges:
+  - Person_Knows_Person.edge.yml
+version: gar/v1

@@ -1,0 +1,19 @@
+[package]
+name = "graphar-info"
+version = "0.1.0-alpha.0"
+description = "Apache GraphAr's information files (graph, vertex and edge YAML): the model, load, dump and validate. Pure, and builds for wasm32."
+keywords = ["graphar", "graph", "property-graph", "yaml"]
+categories = ["data-structures", "encoding", "wasm"]
+readme = "../../README.md"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
