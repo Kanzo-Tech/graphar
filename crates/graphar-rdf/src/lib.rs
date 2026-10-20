@@ -11,7 +11,8 @@
 //!   and per multi-valued or language-tagged column, and eight over the residual table. It reads no
 //!   data, so a host can ask for it before writing.
 //! - [`write()`] partitions the triples by the schema and writes the graph, the counts of
-//!   `graphar-stats` in every vertex chunk and a Puffin file per type, then `mapping.ttl`, then the
+//!   `graphar-stats` in every vertex chunk and a Puffin file per type of several chunks, then
+//!   `mapping.ttl`, then the
 //!   information files.
 //! - [`read()`] is the mapping evaluated over the written tables, natively: the triples it reads
 //!   are the triples [`write()`] was given (**Statement R**). The same holds through any RML

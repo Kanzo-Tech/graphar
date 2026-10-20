@@ -16,7 +16,9 @@ use graphar_parquet::{
 };
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path};
 use oxrdf::{NamedOrBlankNode, Term, Triple};
+use parquet::basic::Encoding;
 use parquet::file::properties::WriterProperties;
+use parquet::schema::types::ColumnPath;
 
 use crate::schema::{
     Cardinality, Column, Error, Object, RESIDUAL_COLUMNS, Schema, Storage, user_types,
@@ -33,8 +35,8 @@ pub struct Options {
     pub chunk_size: u64,
     /// Parquet's writer settings: the codec, the row groups.
     pub props: WriterProperties,
-    /// Whether to count what is written (`graphar-stats`): the footer of every vertex chunk and a
-    /// Puffin file per vertex type.
+    /// Whether to count what is written (`graphar-stats`): the footer of every vertex chunk, and a
+    /// Puffin file for each vertex type of more than one chunk.
     pub stats: bool,
 }
 
@@ -68,7 +70,8 @@ pub struct Written {
 type Place = (usize, usize);
 
 /// **Writes `triples` as the GraphAr graph `schema` reads**, under `root`: every vertex table,
-/// every edge table, the residual table, a Puffin file per vertex type, `mapping.ttl`, and the
+/// every edge table, the residual table, a Puffin file per vertex type of several chunks,
+/// `mapping.ttl`, and the
 /// information files last, so a reader that finds the graph document finds everything it names.
 ///
 /// A subject is a row of the first vertex type whose class it is an instance of, by an
@@ -210,7 +213,7 @@ pub async fn write(
     }
 
     let writer = Writer {
-        props: options.props.clone(),
+        props: index_encoding(options.props.clone()),
         user_types: user_types(),
         footer: options.stats.then(graphar_stats::footer),
     };
@@ -274,6 +277,25 @@ pub async fn write(
     })
 }
 
+/// `props`, with GraphAr's internal-id columns delta-encoded and out of the dictionary: a vertex
+/// chunk's ids are consecutive, an adjacency list's sources sorted, so their deltas are small, and a
+/// dictionary of distinct ids is as large as the ids. A caller's own setting for these columns is
+/// replaced; every other setting is the caller's.
+fn index_encoding(props: WriterProperties) -> WriterProperties {
+    let mut builder = props.into_builder();
+    for column in [
+        graphar_parquet::VERTEX_INDEX_COL,
+        SRC_INDEX_COL,
+        DST_INDEX_COL,
+    ] {
+        let path = ColumnPath::from(column);
+        builder = builder
+            .set_column_dictionary_enabled(path.clone(), false)
+            .set_column_encoding(path, Encoding::DELTA_BINARY_PACKED);
+    }
+    builder.build()
+}
+
 async fn write_table(
     store: &dyn ObjectStore,
     root: &Path,
@@ -283,7 +305,9 @@ async fn write_table(
     options: &Options,
 ) -> Result<u64, Error> {
     let n = write_vertices(store, root, info, std::slice::from_ref(batch), writer).await?;
-    if options.stats {
+    // One chunk's footer already holds the table's exact counts; a sketch is for the distinct
+    // count of several, which their footers cannot give.
+    if options.stats && n > info.chunk_size {
         let puffin = graphar_stats::puffin(info, batch)?;
         put(store, root, &graphar_stats::puffin_path(info), puffin).await?;
     }

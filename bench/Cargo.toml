@@ -1,0 +1,31 @@
+[package]
+name = "graphar-bench"
+version = "0.0.0"
+description = "The measurements of 'Leveraging Parquet for representing RDF data': size, write time and access of GraphAr against N-Triples, HDT and an S/P/O Parquet table, written to bench/results.json."
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+graphar-info.workspace = true
+graphar-parquet.workspace = true
+graphar-rdf.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+# zstd: GAR and SPO are written with one codec, so a difference is the layout's.
+parquet = { workspace = true, features = ["zstd"] }
+object_store = { workspace = true, features = ["fs"] }
+oxrdf.workspace = true
+oxttl.workspace = true
+serde_json.workspace = true
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+flate2 = "1"
+# HDT, the baseline for compact queryable RDF: converted from N-Triples and queried by pattern.
+hdt = { version = "0.7", default-features = false, features = ["nt"] }
+# DuckDB reads GAR and SPO, through the same engine.
+duckdb = { version = "1.10502", features = ["bundled", "parquet"] }
+
+[lints]
+workspace = true
