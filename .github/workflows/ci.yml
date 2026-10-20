@@ -72,7 +72,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: postgres
         ports: ["5432:5432"]
-        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install
@@ -84,7 +84,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - run: pip install datasketches==5.2.0 duckdb==1.5.6 rdflib==7.6.0 morph-kgc==2.10.0 duckdb-engine psycopg2-binary
+      - run: pip install datasketches==5.2.0 duckdb==1.5.6 rdflib==7.2.1 morph-kgc==2.10.0 duckdb-engine==0.17.0 psycopg2-binary==2.9.13
       - name: DataSketches reads graphar-stats' sketch
         run: cargo run -q -p graphar-stats --example theta --locked | python3 -I crates/graphar-stats/tests/read_sketch.py
       - name: RMLMapper
