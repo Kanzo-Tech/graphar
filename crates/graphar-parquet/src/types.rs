@@ -2,9 +2,13 @@
 //! (`types.cc`), as a check of the column a writer is handed.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use arrow_schema::{DataType as Arrow, TimeUnit};
-use graphar_info::{Cardinality, DataType, Property};
+use graphar_info::{Cardinality, DataType, Property, PropertyGroup, VertexInfo};
+use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 
 /// The Arrow type of each user-defined type a graph's version declares (`gar/v1 (langString)`),
@@ -15,13 +19,37 @@ use parquet::file::properties::WriterProperties;
 pub type UserTypes = BTreeMap<String, Arrow>;
 
 /// How the writers write: Parquet's [`WriterProperties`] (the codec, the row groups: a codec is a
-/// feature of `parquet` the caller turns on) and the Arrow type of each user-defined type.
+/// feature of `parquet` the caller turns on), the Arrow type of each user-defined type, and what
+/// each vertex chunk's footer carries beside them.
 #[derive(Clone, Debug, Default)]
 pub struct Options {
     /// Parquet's own writer settings, as `ParquetObjectWriter` takes them.
     pub props: WriterProperties,
     /// The Arrow type of each user-defined type the graph declares.
     pub user_types: UserTypes,
+    /// The key/value pairs of each vertex chunk's footer, computed from the chunk.
+    pub footer: Option<Footer>,
+}
+
+/// What a vertex chunk's footer carries in its `key_value_metadata`, computed from the chunk as it
+/// is written: the vertex type, the property group, and the chunk's rows (`_graphArVertexIndex`,
+/// then the group's properties). GraphAr names no key there, and Parquet's footer is the one place
+/// every reader already opens, so a writer that counts what it writes (`graphar-stats`) puts the
+/// counts here. An error refuses the chunk, and the table with it.
+#[derive(Clone)]
+pub struct Footer(
+    #[allow(clippy::type_complexity)]
+    pub  Arc<
+        dyn Fn(&VertexInfo, &PropertyGroup, &RecordBatch) -> Result<Vec<KeyValue>, String>
+            + Send
+            + Sync,
+    >,
+);
+
+impl fmt::Debug for Footer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Footer(..)")
+    }
 }
 
 /// Whether `arrow` holds `t`. The specification ("Property Data Types") fixes the meaning of each

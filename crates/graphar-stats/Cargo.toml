@@ -1,0 +1,30 @@
+[package]
+name = "graphar-stats"
+version = "0.1.0-alpha.1"
+description = "What a GraphAr vertex chunk holds, counted as it is written: distinct counts and commonest values in the chunk's Parquet footer, and a Puffin file of Theta sketches for the distinct count of a whole table. Builds for wasm32."
+keywords = ["graphar", "parquet", "statistics", "puffin", "theta-sketch"]
+categories = ["data-structures", "encoding", "wasm"]
+readme = "../../README.md"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+graphar-info.workspace = true
+graphar-parquet.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+arrow-cast.workspace = true
+parquet.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+object_store.workspace = true
+bytes.workspace = true
+
+[lints]
+workspace = true

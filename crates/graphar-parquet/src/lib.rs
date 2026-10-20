@@ -29,7 +29,7 @@ mod read;
 mod types;
 mod write;
 
-pub use types::{Options, UserTypes};
+pub use types::{Footer, Options, UserTypes};
 
 pub use error::Error;
 pub use read::{

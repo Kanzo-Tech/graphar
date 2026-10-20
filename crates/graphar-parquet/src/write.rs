@@ -10,7 +10,8 @@ use graphar_info::{
     AdjListType, EdgeInfo, FileType, GraphInfo, Property, PropertyGroup, VertexInfo,
 };
 use object_store::{ObjectStore, PutOptions, PutPayload, path::Path};
-use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
+use parquet::arrow::ArrowWriter;
+use parquet::file::{metadata::KeyValue, properties::WriterProperties};
 
 use crate::error::{Error, invalid};
 use crate::types::{Options, UserTypes, holds_property};
@@ -55,9 +56,13 @@ async fn put_parquet(
     relative: &str,
     batch: &RecordBatch,
     props: &WriterProperties,
+    footer: Vec<KeyValue>,
 ) -> Result<(), Error> {
     let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props.clone()))?;
     writer.write(batch)?;
+    for kv in footer {
+        writer.append_key_value_metadata(kv);
+    }
     put(store, root, relative, writer.into_inner()?).await
 }
 
@@ -180,7 +185,13 @@ pub async fn write_vertices(
                 }),
             );
             let path = paths::vertex_chunk(info, group, k);
-            put_parquet(store, root, &path, &batch_of(chunk)?, &options.props).await?;
+            let batch = batch_of(chunk)?;
+            let footer = match &options.footer {
+                Some(footer) => (footer.0)(info, group, &batch)
+                    .map_err(|reason| invalid(format!("{at}, chunk {k}"), reason))?,
+                None => Vec::new(),
+            };
+            put_parquet(store, root, &path, &batch, &options.props, footer).await?;
         }
     }
     put_count(store, root, &paths::vertex_count(info), count).await?;
@@ -323,6 +334,7 @@ pub async fn write_edges(
                 &paths::offset_chunk(info, adj, part),
                 &batch,
                 &options.props,
+                Vec::new(),
             )
             .await?;
         }
@@ -336,6 +348,7 @@ pub async fn write_edges(
                 &paths::adj_list_chunk(info, adj, part, chunk),
                 &adj_list,
                 &options.props,
+                Vec::new(),
             )
             .await?;
             let mut column = 2;
@@ -349,6 +362,7 @@ pub async fn write_edges(
                     &path,
                     &rows.project(&projection)?,
                     &options.props,
+                    Vec::new(),
                 )
                 .await?;
             }
