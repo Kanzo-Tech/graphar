@@ -68,7 +68,10 @@ tagged string read per row, and as R2RML, whose language is a constant, with a t
 language the column holds. Both delimit every SQL identifier and write standard SQL, and
 [`conformance/rml/run.py`](conformance/rml/run.py) runs both in CI through Morph-KGC on DuckDB and
 PostgreSQL and RMLMapper on PostgreSQL, against the triples written. One defect of RMLMapper 8.1.0
-is explained rather than hidden there: booleans read from PostgreSQL as `t`/`f`.
+is explained rather than hidden there: booleans read from PostgreSQL as `t`/`f`. And
+[`conformance/rml/algemaploom.py`](conformance/rml/algemaploom.py) checks that AlgeMapLoom
+(RMLio/mappingloom-rs) translates `mapping.ttl` into the same plan: a pipeline per triples map, over
+its source, writing its triples.
 
 ## Releasing
 

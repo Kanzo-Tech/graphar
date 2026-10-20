@@ -95,6 +95,17 @@ jobs:
           cargo run -q -p graphar-rdf --example write --locked -- $d/people.shacl.ttl $d/people.ttl people 2
           python3 -I conformance/rml/run.py people $d/people.ttl \
             --pg "host=127.0.0.1 port=5432 user=postgres password=postgres" --rmlmapper rmlmapper.jar
+      # AlgeMapLoom is not on crates.io: its translator is built at a pinned commit, on its own
+      # toolchain.
+      - name: AlgeMapLoom
+        run: |
+          git clone -q https://github.com/RMLio/mappingloom-rs "$RUNNER_TEMP/mappingloom-rs"
+          cd "$RUNNER_TEMP/mappingloom-rs"
+          git checkout -q 9e3f4093ecf4a34f438b2263b2e72f686ba0faed
+          rustup toolchain install 1.87.0 --profile minimal
+          cargo +1.87.0 build -q --release --locked -p translator --bin translator-bin
+      - name: the plan of mapping.ttl as AlgeMapLoom translates it
+        run: python3 -I conformance/rml/algemaploom.py people "$RUNNER_TEMP/mappingloom-rs/target/release/translator-bin"
 
   # graphar-duckdb, tested on a native DuckDB against conformance/sample.
   node:

@@ -17,7 +17,8 @@
 //! - [`read()`] is the plan evaluated over the written tables, natively: the triples it reads are
 //!   the triples [`write()`] was given, up to the canonical lexical form of a literal
 //!   (**Statement R**). The same holds through a processor that runs either mapping on the tables;
-//!   `conformance/rml` runs Morph-KGC and RMLMapper on both.
+//!   `conformance/rml` runs Morph-KGC and RMLMapper on both, and checks that AlgeMapLoom translates
+//!   `mapping.ttl` into the same plan.
 //!
 //! **Closed.** Only a conforming graph is written: every subject an IRI typed by exactly one
 //! targeted class, every other triple a value of one of its type's columns or an edge to a row of
