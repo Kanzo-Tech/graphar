@@ -1,0 +1,36 @@
+@prefix ex: <https://example.org/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix schema: <https://schema.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:alice a ex:Person ;
+  foaf:name "Alice" ; schema:name "Alice Liddell" ;
+  ex:age 30 ; ex:born "1990-05-01"^^xsd:date ; ex:active true ;
+  ex:nick "Al"@en, "Ali"@es ; ex:motto "Curiouser"@en ;
+  ex:homepage <https://alice.example> ;
+  ex:knows ex:bob, ex:carol, ex:nobody ;
+  ex:worksFor ex:acme ;
+  ex:tag "a", "b" .
+
+ex:bob a ex:Person, ex:Employee ;
+  foaf:name "Bob" ;
+  ex:age "031"^^xsd:integer ;
+  ex:born "1985-13-01"^^xsd:date ;
+  ex:knows ex:alice ;
+  ex:shoeSize 42.5 .
+
+ex:carol a ex:Person ;
+  foaf:name "Carol", "Caroline" ;
+  ex:age 25 ;
+  ex:knows [ foaf:name "Someone" ] ;
+  ex:worksFor ex:acme .
+
+ex:dave a ex:Person ;
+  ex:age 41 .
+
+ex:acme a ex:Organization ;
+  schema:name "ACME"@en ;
+  ex:founded 1999 .
+
+_:x foaf:name "Anonymous" ; a ex:Person .
+ex:notyped foaf:name "Nobody" .
