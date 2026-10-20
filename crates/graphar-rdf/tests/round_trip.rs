@@ -62,17 +62,24 @@ fn round_trip(schema: &Schema, chunk_size: u64) -> (graphar_rdf::Written, BTreeS
 #[test]
 fn shacl_and_shex_make_one_schema() {
     let shacl = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
-    let shex = shapes::shex::from_json(&data("people.shex.json")).expect("ShExJ");
+    let shexj = shapes::shex::from_json(&data("people.shex.json")).expect("ShExJ");
+    let shexc = shapes::shex::from_compact(&data("people.shex")).expect("ShExC");
     // ShEx `max` defaults to 1, SHACL's to unbounded: the documents say the same.
-    assert_eq!(shacl, shex);
+    assert_eq!(shacl, shexj);
+    assert_eq!(shacl, shexc);
     let person = shacl.vertex("Person").expect("Person");
     let names: Vec<(&str, &Object, Cardinality)> = person
         .columns
         .iter()
         .map(|c| (c.name.as_str(), &c.object, c.cardinality))
         .collect();
-    assert_eq!(names[0].0, "name");
-    assert_eq!(names[1].0, "name_2", "schema:name beside foaf:name");
+    let named = |predicate: &str| {
+        let c = person.columns.iter().find(|c| c.predicate == predicate);
+        c.map(|c| c.name.as_str())
+    };
+    // `http://xmlns.com/…` before `https://schema.org/…`: the first takes the name.
+    assert_eq!(named("http://xmlns.com/foaf/0.1/name"), Some("name"));
+    assert_eq!(named("https://schema.org/name"), Some("name_2"));
     assert!(
         names
             .iter()
@@ -105,7 +112,7 @@ fn every_triple_comes_back_at_every_chunk_size() {
         assert_eq!(written.triples as usize, given.len());
         assert_eq!(
             written.vertices,
-            [("Person".to_owned(), 4), ("Organization".to_owned(), 1)]
+            [("Organization".to_owned(), 1), ("Person".to_owned(), 4)]
         );
         // alice→bob, alice→carol, bob→alice, carol→dave.
         assert_eq!(written.edges[0], ("Person_knows_Person".to_owned(), 4));

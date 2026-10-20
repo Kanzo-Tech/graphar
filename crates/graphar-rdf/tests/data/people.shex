@@ -1,0 +1,26 @@
+PREFIX ex: <https://example.org/>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX schema: <https://schema.org/>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+ex:PersonShape {
+  rdf:type [ ex:Person ] ;
+  foaf:name xsd:string ;
+  schema:name xsd:string ? ;
+  ex:age xsd:integer ;
+  ex:born xsd:date ? ;
+  ex:active xsd:boolean ? ;
+  ex:nick rdf:langString * ;
+  ex:motto rdf:langString ? ;
+  ex:homepage IRI ? ;
+  ex:tag xsd:string * ;
+  ex:knows @ex:PersonShape * ;
+  ex:worksFor @ex:OrganizationShape ?
+}
+
+ex:OrganizationShape {
+  rdf:type [ ex:Organization ] ;
+  schema:name rdf:langString ;
+  ex:founded xsd:int ?
+}

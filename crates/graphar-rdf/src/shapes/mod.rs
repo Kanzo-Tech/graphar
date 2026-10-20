@@ -16,10 +16,15 @@
 //! place, which is the closed reading (`sh:closed`, ShEx `CLOSED`) of these shapes. A shape that
 //! names no class targets nothing `write` reads.
 //!
+//! **Order.** Types are in the order of their classes' IRIs, and the columns and edge types of
+//! each in the order of their predicates' IRIs: a function of the shapes, whichever language and
+//! syntax states them, and not of the order a document happens to list them in. Of two shapes of
+//! one class the one with the smaller label is read.
+//!
 //! **Names.** A type is named by its class's local name and a column or an edge type by its
-//! predicate's, made a plain identifier; a name already taken gets `_2`, `_3`, … in document
-//! order. The IRIs are the meaning and they are in the mapping, so two predicates with one local
-//! name (`foaf:name`, `schema:name`) are two columns, `name` and `name_2`.
+//! predicate's, made a plain identifier; a name already taken gets `_2`, `_3`, … in that order.
+//! The IRIs are the meaning and they are in the mapping, so two predicates with one local name
+//! (`foaf:name`, `schema:name`) are two columns, `name` and `name_2`.
 
 pub mod shacl;
 pub mod shex;
@@ -48,9 +53,10 @@ pub(crate) struct Shape {
     pub properties: Vec<(String, Target, Cardinality)>,
 }
 
-/// The schema of `shapes`, in their order.
+/// The schema of `shapes`, in the order the module comment gives.
 pub(crate) fn schema(shapes: &[Shape]) -> Schema {
-    let typed: Vec<&Shape> = shapes.iter().filter(|s| s.class.is_some()).collect();
+    let mut typed: Vec<&Shape> = shapes.iter().filter(|s| s.class.is_some()).collect();
+    typed.sort_by(|a, b| (&a.class, &a.id).cmp(&(&b.class, &b.id)));
     let mut seen_classes = HashSet::new();
     let typed: Vec<&Shape> = typed
         .into_iter()
@@ -70,7 +76,9 @@ pub(crate) fn schema(shapes: &[Shape]) -> Schema {
         let mut edge_names = Names::new(&[]);
         let mut predicates = HashSet::new();
         let mut columns = Vec::new();
-        for (predicate, target, cardinality) in &shape.properties {
+        let mut properties: Vec<_> = shape.properties.iter().collect();
+        properties.sort_by(|a, b| a.0.cmp(&b.0));
+        for (predicate, target, cardinality) in properties {
             if !predicates.insert(predicate.clone()) {
                 continue;
             }

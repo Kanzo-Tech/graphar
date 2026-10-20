@@ -1,120 +1,125 @@
-//! SHACL Core shapes graphs in Turtle (W3C Recommendation, 20 July 2017), the fragment the module
-//! comment of [`crate::shapes`] names.
+//! SHACL Core shapes graphs in Turtle (W3C Recommendation, 20 July 2017), read by rudof: its
+//! `rudof_rdf` parses the Turtle and `shacl`'s `ShaclParser` turns the graph into shapes. This
+//! module only reads the fragment the module comment of [`crate::shapes`] names off them.
 
-use std::collections::HashMap;
-
-use oxrdf::{NamedOrBlankNode, Term, Triple};
-use oxttl::TurtleParser;
+use rudof_rdf::rdf_core::term::Object as Node;
+use rudof_rdf::rdf_core::{RDFFormat, SHACLPath};
+use rudof_rdf::rdf_impl::{OxigraphInMemory, ReaderMode};
+use shacl::ast::{ASTComponent, ASTSchema, ASTShape};
+use shacl::rdf::ShaclParser;
+use shacl::types::{NodeKind, Target as ShaclTarget};
 
 use super::{Shape, Target};
+use crate::RDF_LANG_STRING;
 use crate::schema::{Cardinality, Error, Object, Schema};
-use crate::{RDF_LANG_STRING, RDF_TYPE};
-
-const SH: &str = "http://www.w3.org/ns/shacl#";
-const RDFS_CLASS: &str = "http://www.w3.org/2000/01/rdf-schema#Class";
 
 /// The schema of a SHACL shapes graph written in Turtle.
 ///
 /// # Errors
-/// [`Error::Shapes`] when the document does not parse.
+/// [`Error::Shapes`] when the document does not parse or rudof refuses the shapes in it.
 pub fn from_turtle(text: &str) -> Result<Schema, Error> {
-    let triples = TurtleParser::new()
-        .for_slice(text.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
+    let graph = OxigraphInMemory::from_str(text, &RDFFormat::Turtle, None, &ReaderMode::Strict)
         .map_err(|e| Error::Shapes(e.to_string()))?;
-    Ok(super::schema(&shapes(&triples)))
+    let schema = ShaclParser::new(graph)
+        .parse()
+        .map_err(|e| Error::Shapes(e.to_string()))?;
+    Ok(super::schema(&shapes(&schema)))
 }
 
-fn shapes(triples: &[Triple]) -> Vec<Shape> {
-    let mut about: HashMap<&NamedOrBlankNode, Vec<&Triple>> = HashMap::new();
-    for t in triples {
-        about.entry(&t.subject).or_default().push(t);
-    }
-    let objects = |s: &NamedOrBlankNode, p: &str| -> Vec<&Term> {
-        about
-            .get(s)
-            .into_iter()
-            .flatten()
-            .filter(|t| t.predicate.as_str() == p)
-            .map(|t| &t.object)
-            .collect()
-    };
-    let sh = |local: &str| format!("{SH}{local}");
-    let iri = |t: &Term| match t {
-        Term::NamedNode(n) => Some(n.as_str().to_owned()),
-        _ => None,
-    };
-    let node = |t: &Term| match t {
-        Term::NamedNode(n) => Some(NamedOrBlankNode::from(n.clone())),
-        Term::BlankNode(b) => Some(NamedOrBlankNode::from(b.clone())),
-        _ => None,
-    };
-    let id = |n: &NamedOrBlankNode| n.to_string();
-
-    // Node shapes, in document order of their first triple.
-    let mut order: Vec<&NamedOrBlankNode> = Vec::new();
-    for t in triples {
-        let node_shape = t.predicate.as_str() == RDF_TYPE
-            && matches!(&t.object, Term::NamedNode(c) if c.as_str() == sh("NodeShape"));
-        if node_shape && !order.contains(&&t.subject) {
-            order.push(&t.subject);
-        }
-    }
-    order
-        .into_iter()
-        .map(|s| {
-            let class = objects(s, &sh("targetClass"))
-                .into_iter()
-                .find_map(iri)
-                .or_else(|| {
-                    let implicit = objects(s, RDF_TYPE)
-                        .iter()
-                        .any(|c| iri(c).as_deref() == Some(RDFS_CLASS));
-                    match (implicit, s) {
-                        (true, NamedOrBlankNode::NamedNode(n)) => Some(n.as_str().to_owned()),
-                        _ => None,
-                    }
-                });
-            let properties = objects(s, &sh("property"))
-                .into_iter()
-                .filter_map(node)
+fn shapes(schema: &ASTSchema) -> Vec<Shape> {
+    schema
+        .iter()
+        .filter_map(|(id, shape)| match shape {
+            ASTShape::NodeShape(node) => Some((id, node)),
+            ASTShape::PropertyShape(_) => None,
+        })
+        .map(|(id, node)| {
+            // `sh:targetClass`, or the shape itself when it is a class (SHACL 2.1.3.1).
+            let class = node.targets().iter().find_map(|t| match t {
+                ShaclTarget::Class(Node::Iri(c)) | ShaclTarget::ImplicitClass(Node::Iri(c)) => {
+                    Some(c.as_str().to_owned())
+                }
+                _ => None,
+            });
+            let properties = node
+                .property_shapes()
+                .iter()
+                .filter_map(|p| match schema.get_shape(p) {
+                    Some(ASTShape::PropertyShape(p)) => Some(p),
+                    _ => None,
+                })
                 .filter_map(|p| {
-                    let path = objects(&p, &sh("path")).into_iter().find_map(iri)?;
-                    let one = |local: &str| objects(&p, &sh(local)).into_iter().next();
-                    let target = if let Some(dt) = one("datatype").and_then(iri) {
-                        Target::Column(if dt == RDF_LANG_STRING {
-                            Object::LangString
-                        } else {
-                            Object::Literal(dt)
-                        })
-                    } else if one("languageIn").is_some() {
-                        Target::Column(Object::LangString)
-                    } else if let Some(class) = one("class").and_then(iri) {
-                        Target::Class(class)
-                    } else if let Some(shape) = one("node").and_then(node) {
-                        Target::Shape(id(&shape))
-                    } else if one("nodeKind").and_then(iri).as_deref() == Some(&sh("IRI")) {
-                        Target::Column(Object::Iri)
-                    } else {
+                    let SHACLPath::Predicate { pred } = p.path() else {
                         return None;
                     };
-                    let single = one("maxCount").is_some_and(|m| match m {
-                        Term::Literal(l) => l.value() == "1",
-                        _ => false,
-                    });
-                    let cardinality = if single {
-                        Cardinality::Single
-                    } else {
-                        Cardinality::Set
-                    };
-                    Some((path, target, cardinality))
+                    Some((pred.as_str().to_owned(), target(p.components())?, {
+                        let single = p
+                            .components()
+                            .iter()
+                            .any(|c| matches!(c, ASTComponent::MaxCount(1)));
+                        if single {
+                            Cardinality::Single
+                        } else {
+                            Cardinality::Set
+                        }
+                    }))
                 })
                 .collect();
             Shape {
-                id: id(s),
+                id: label(id),
                 class,
                 properties,
             }
         })
         .collect()
+}
+
+/// What a property shape's values are, by the first of `sh:datatype`, `sh:languageIn`,
+/// `sh:class`, `sh:node` and `sh:nodeKind sh:IRI` it has.
+fn target(components: &[ASTComponent]) -> Option<Target> {
+    let find = |f: fn(&ASTComponent) -> Option<Target>| components.iter().find_map(f);
+    find(|c| match c {
+        ASTComponent::Datatype(dt) => {
+            let dt = dt.get_iri().ok()?;
+            Some(Target::Column(if dt.as_str() == RDF_LANG_STRING {
+                Object::LangString
+            } else {
+                Object::Literal(dt.as_str().to_owned())
+            }))
+        }
+        _ => None,
+    })
+    .or_else(|| {
+        find(|c| match c {
+            ASTComponent::LanguageIn(_) => Some(Target::Column(Object::LangString)),
+            _ => None,
+        })
+    })
+    .or_else(|| {
+        find(|c| match c {
+            ASTComponent::Class(Node::Iri(c)) => Some(Target::Class(c.as_str().to_owned())),
+            _ => None,
+        })
+    })
+    .or_else(|| {
+        find(|c| match c {
+            ASTComponent::Node(shape) => Some(Target::Shape(label(shape))),
+            _ => None,
+        })
+    })
+    .or_else(|| {
+        find(|c| match c {
+            ASTComponent::NodeKind(NodeKind::Iri) => Some(Target::Column(Object::Iri)),
+            _ => None,
+        })
+    })
+}
+
+/// A shape's IRI, or a blank node's `_:label`.
+fn label(id: &Node) -> String {
+    match id {
+        Node::Iri(iri) => iri.as_str().to_owned(),
+        Node::BlankNode(b) => format!("_:{b}"),
+        other => other.to_string(),
+    }
 }

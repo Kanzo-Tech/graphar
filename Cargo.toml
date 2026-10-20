@@ -26,6 +26,14 @@ serde_json = "1"
 # RDF terms and Turtle/N-Triples, from Oxigraph: published, no runtime, and they build for wasm32.
 oxrdf = "0.3"
 oxttl = "0.2"
+# Shape documents, read by rudof as published: `shacl` and `rudof_rdf` without `sparql`, whose
+# `reqwest` and `tokio` do not build for wasm32. Natively `rudof_rdf` still links Oxigraph and
+# `tokio`; neither reaches the wasm32 build.
+shex_ast = "0.3.29"
+shacl = { version = "0.3.29", default-features = false }
+rudof_rdf = { version = "0.3.29", default-features = false }
+rudof_iri = "0.3.29"
+prefixmap = "0.3.29"
 # `arrow` only: a compression codec is the consumer's to turn on (`parquet/zstd`, …), and
 # `async`/`object_store` are off because both bring `tokio` into the wasm32 build.
 parquet = { version = "58", default-features = false, features = ["arrow"] }

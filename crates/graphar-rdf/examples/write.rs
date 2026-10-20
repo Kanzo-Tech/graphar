@@ -1,7 +1,7 @@
 //! Writes an RDF graph and its shapes as GraphAr to a directory:
 //!
 //! ```sh
-//! cargo run -p graphar-rdf --example write -- <shapes.ttl | shapes.shex.json> <data.ttl | data.nt> <dir> [chunk_size]
+//! cargo run -p graphar-rdf --example write -- <shapes.ttl | shapes.shex | shapes.shex.json> <data.ttl | data.nt> <dir> [chunk_size]
 //! ```
 //!
 //! A graph that does not conform to the shapes is refused, naming the triple and why.
@@ -18,6 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let schema = match shapes_file.as_str() {
         f if f.ends_with(".json") => shapes::shex::from_json(&std::fs::read_to_string(f)?)?,
+        f if f.ends_with(".shex") => shapes::shex::from_compact(&std::fs::read_to_string(f)?)?,
         f => shapes::shacl::from_turtle(&std::fs::read_to_string(f)?)?,
     };
     let bytes = std::fs::read(data)?;
