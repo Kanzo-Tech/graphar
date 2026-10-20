@@ -52,7 +52,9 @@ Over object storage (`access_remote`), each access is read cold, by a reader wit
 bucket, and counted: `requests` (GETs, whole or a byte range, HEADs and LISTs) and the `bytes` the
 GETs return. Every layout is read through an `object_store` that counts each call, which is one
 HTTP request to an S3-compatible bucket. SPO and GAR are read by DataFusion with filter pushdown
-and the page index, registering only the tables the query names; Zarr by its pattern reader, which
+and the page index, registering only the tables the query names and each from its files by name,
+never by listing: GAR's chunks are named by the graph document, the table's information file and
+its count files (a GET each), as GraphAr's path conventions derive them; Zarr by its pattern reader, which
 first reads the group (and so all three dictionaries); HDT and gzipped N-Triples have no partial
 access, and are one GET of the whole file.
 

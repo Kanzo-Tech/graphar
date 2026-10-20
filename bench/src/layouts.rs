@@ -26,6 +26,7 @@ pub struct Written {
     pub hdt: PathBuf,
     pub spo: PathBuf,
     pub gar: PathBuf,
+    pub gar_info: graphar_info::GraphInfo,
     pub zarr: PathBuf,
     pub gar_summary: Value,
     pub sizes: Value,
@@ -195,6 +196,7 @@ pub fn write_all(dir: &Path, triples: &[Triple], runs: usize) -> Written {
         hdt,
         spo,
         gar,
+        gar_info: summary.info.clone(),
         zarr,
         sizes,
         write_seconds: json!({

@@ -9,6 +9,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+graphar-info.workspace = true
+graphar-parquet.workspace = true
 graphar-rdf.workspace = true
 graphar-stats.workspace = true
 arrow-array.workspace = true

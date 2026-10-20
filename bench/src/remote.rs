@@ -7,7 +7,8 @@
 //! engine, nothing cached), so the count is what a serverless reader pays for that answer alone.
 //!
 //! GAR and SPO are read by DataFusion, with filter pushdown and the page index, the tables a query
-//! names registered from their chunks; Zarr by its layout's own reader through `zarrs`, counted at
+//! names registered from their files by name: GAR's as the graph document, the table's information
+//! file and its count files name them (each a GET), so no layout is listed; Zarr by its layout's own reader through `zarrs`, counted at
 //! its storage interface the same way (a whole value or a byte range, one GET each); HDT and
 //! N-Triples have no partial access, and are one GET of the whole file.
 
@@ -18,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use datafusion::arrow::array::{Array as _, Int64Array};
-use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::sql::TableReference;
 use futures::stream::BoxStream;
 use object_store::local::LocalFileSystem;
@@ -137,42 +138,132 @@ impl ObjectStore for Counting {
     }
 }
 
-/// The tables of a Parquet layout: each name and the directory (or file) under the layout's root
-/// that holds it.
-pub type Tables = Vec<(String, String)>;
+/// Where a Parquet layout's tables are.
+pub enum Layout<'a> {
+    /// Each table, one file.
+    Files(Vec<(String, String)>),
+    /// A GraphAr graph: each table's chunks are named by the information files and the count
+    /// files, so a reader lists nothing.
+    Gar(&'a graphar_info::GraphInfo),
+}
 
-/// The answer of `sql` over `tables` under `root`, read cold through a counting store, and what it
-/// cost.
-pub async fn count_sql(root: &Path, tables: &Tables, sql: &str) -> (u64, Value) {
+/// The chunks of GraphAr table `name`, as a reader that has read the graph document finds them
+/// with nothing but the store: the table's information file, then its count files, a GET each.
+async fn gar_chunks(store: &Counting, info: &graphar_info::GraphInfo, name: &str) -> Vec<String> {
+    use graphar_parquet::{paths, read_count};
+    let root = StorePath::from("");
+    let get = |file: String| async move {
+        store
+            .get_opts(&StorePath::from(file.as_str()), GetOptions::default())
+            .await
+            .unwrap_or_else(|e| panic!("{file}: {e}"))
+            .bytes()
+            .await
+            .expect("bytes")
+    };
+    if let Some(v) = info.vertices.iter().find(|v| v.r#type == name) {
+        get(format!("{name}.vertex.yml")).await;
+        let n = read_count(store, &root, &paths::vertex_count(v))
+            .await
+            .expect("vertex_count");
+        let group = &v.property_groups[0];
+        return (0..n.div_ceil(v.chunk_size))
+            .map(|k| paths::vertex_chunk(v, group, k))
+            .collect();
+    }
+    let e = info
+        .edges
+        .iter()
+        .find(|e| format!("{}_{}_{}", e.src_type, e.edge_type, e.dst_type) == name)
+        .unwrap_or_else(|| panic!("no table {name}"));
+    get(format!("{name}.edge.yml")).await;
+    let adj = &e.adj_lists[0];
+    let sources = read_count(store, &root, &paths::edge_vertex_count(e, adj))
+        .await
+        .expect("vertex_count");
+    let mut out = Vec::new();
+    for part in 0..sources.div_ceil(e.src_chunk_size) {
+        let edges = read_count(store, &root, &paths::edge_count(e, adj, part))
+            .await
+            .expect("edge_count");
+        out.extend(
+            (0..edges.div_ceil(e.chunk_size)).map(|k| paths::adj_list_chunk(e, adj, part, k)),
+        );
+    }
+    out
+}
+
+/// The answer of `sql` over the tables of `layout` under `root`, read cold through a counting
+/// store, and what it cost. A table is registered from its files by name, never by listing a
+/// directory, and only if the query names it.
+pub async fn count_sql(root: &Path, layout: &Layout<'_>, sql: &str) -> (u64, Value) {
+    use datafusion::datasource::file_format::parquet::ParquetFormat;
+    use datafusion::datasource::listing::{
+        ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+    };
     let store = Arc::new(Counting::local(root));
     let counts = store.counts.clone();
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
     config.options_mut().execution.parquet.reorder_filters = true;
-    // An adjacency list's chunks are under `part<n>/`.
-    config
-        .options_mut()
-        .execution
-        .listing_table_ignore_subdirectory = false;
     let ctx = SessionContext::new_with_config(config);
     let url = url::Url::parse("bench://layout/").expect("a URL");
-    ctx.register_object_store(&url, store);
-    for (name, path) in tables {
+    ctx.register_object_store(&url, store.clone());
+    let names: Vec<String> = match layout {
+        Layout::Files(files) => files.iter().map(|(n, _)| n.clone()).collect(),
+        Layout::Gar(info) => info
+            .vertices
+            .iter()
+            .map(|v| v.r#type.clone())
+            .chain(
+                info.edges
+                    .iter()
+                    .map(|e| format!("{}_{}_{}", e.src_type, e.edge_type, e.dst_type)),
+            )
+            .collect(),
+    };
+    if let Layout::Gar(info) = layout {
+        // The graph document, once: it names every information file.
+        let document = StorePath::from(format!("{}.graph.yml", info.name).as_str());
+        store
+            .get_opts(&document, GetOptions::default())
+            .await
+            .expect("the graph document")
+            .bytes()
+            .await
+            .expect("bytes");
+    }
+    for name in names {
         // Only what the query names: a reader opens no table it does not read.
         if !sql.contains(&format!("\"{name}\"")) && !sql.contains(&format!(" {name} ")) {
             continue;
         }
-        ctx.register_parquet(
-            TableReference::bare(name.clone()),
-            format!("bench://layout/{path}"),
-            // GraphAr's chunks have no extension.
-            ParquetReadOptions {
-                file_extension: "",
-                ..ParquetReadOptions::default()
-            },
-        )
-        .await
-        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let files = match layout {
+            Layout::Files(files) => vec![
+                files
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .expect("a table")
+                    .1
+                    .clone(),
+            ],
+            Layout::Gar(info) => gar_chunks(&store, info, &name).await,
+        };
+        let urls = files
+            .iter()
+            .map(|f| ListingTableUrl::parse(format!("bench://layout/{f}")).expect("a URL"))
+            .collect();
+        // GraphAr's chunks have no extension.
+        let options =
+            ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension("");
+        let table_config = ListingTableConfig::new_with_multi_paths(urls)
+            .with_listing_options(options)
+            .infer_schema(&ctx.state())
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let table = ListingTable::try_new(table_config).expect("a table");
+        ctx.register_table(TableReference::bare(name.clone()), Arc::new(table))
+            .expect("registered");
     }
     let batches = ctx
         .sql(sql)

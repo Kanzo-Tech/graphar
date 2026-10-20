@@ -1780,6 +1780,8 @@ dependencies = [
  "duckdb",
  "flate2",
  "futures",
+ "graphar-info",
+ "graphar-parquet",
  "graphar-rdf",
  "graphar-stats",
  "hdt",

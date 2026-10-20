@@ -222,22 +222,6 @@ fn zarr_term(t: &str) -> String {
     }
 }
 
-/// GAR's tables, as the directories under its root that hold their chunks.
-fn gar_tables(schema: &Schema) -> crate::remote::Tables {
-    let mut out: crate::remote::Tables = schema
-        .vertices
-        .iter()
-        .map(|v| (v.label.clone(), format!("vertex/{}/properties/", v.label)))
-        .collect();
-    out.extend(schema.edges.iter().map(|e| {
-        (
-            e.triple(),
-            format!("edge/{}/ordered_by_source/adj_list/", e.triple()),
-        )
-    }));
-    out
-}
-
 /// Every access on SPO, GAR, HDT and Zarr, and N-Triples' and HDT's load times.
 pub fn run_all(_dir: &Path, w: &Written, runs: usize) -> Access {
     let spo = Connection::open_in_memory().expect("DuckDB");
@@ -272,7 +256,6 @@ pub fn run_all(_dir: &Path, w: &Written, runs: usize) -> Access {
     );
 
     let local_zarr = zarr::Zarr::open_local(&w.zarr);
-    let tables = gar_tables(&w.schema);
     let rt = tokio::runtime::Runtime::new().expect("a runtime");
     let mut seconds = Map::new();
     let mut rows = Map::new();
@@ -314,10 +297,11 @@ pub fn run_all(_dir: &Path, w: &Written, runs: usize) -> Access {
         // Over object storage, cold: requests and bytes, and the same answer.
         let spo_dir = w.spo.parent().expect("a directory");
         let spo_file = w.spo.file_name().expect("a file").to_string_lossy();
-        let spo_tables = vec![("rdf".to_owned(), spo_file.into_owned())];
+        let spo_layout = remote::Layout::Files(vec![("rdf".to_owned(), spo_file.into_owned())]);
         let (spo_r, spo_cost) =
-            rt.block_on(remote::count_sql(spo_dir, &spo_tables, &q.triples_sql));
-        let (gar_r, gar_cost) = rt.block_on(remote::count_sql(&w.gar, &tables, &routed));
+            rt.block_on(remote::count_sql(spo_dir, &spo_layout, &q.triples_sql));
+        let gar_layout = remote::Layout::Gar(&w.gar_info);
+        let (gar_r, gar_cost) = rt.block_on(remote::count_sql(&w.gar, &gar_layout, &routed));
         let (zarr_r, zarr_cost) = remote::count_zarr(&w.zarr, &pattern);
         assert!(
             spo_r == gar_n && gar_r == gar_n && zarr_r == gar_n,
