@@ -21,9 +21,7 @@
 //! its first field, the lexical form. A value is compared and reported as Arrow's text of it,
 //! which for every GraphAr type is the lexical form RDF gives it.
 
-mod murmur3;
 pub mod puffin;
-pub mod theta;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,7 +33,8 @@ use graphar_info::{Cardinality, Property, PropertyGroup, VertexInfo};
 use parquet::file::metadata::KeyValue;
 use serde::{Deserialize, Serialize, Serializer};
 
-pub use theta::Sketch;
+use datasketches::hash::value::raw_bytes;
+use datasketches::theta::{CompactThetaSketch, ThetaSketchBuilder};
 
 /// The footer key a vertex chunk's counts are under, namespaced by this crate's name the way Arrow
 /// namespaces its own `ARROW:schema`.
@@ -271,6 +270,21 @@ fn value_bytes(array: &ArrayRef) -> Result<Vec<Option<Vec<u8>>>, Error> {
     })
 }
 
+/// The compact Theta sketch of `values`, each given as the bytes Iceberg's single-value
+/// serialization makes of it, built by Apache DataSketches with its defaults (`lg_k` 12, seed
+/// 9001) and hashing each value's bytes as they are, as every DataSketches binding hashes a
+/// string or a byte array, so any of them reads and merges it.
+#[must_use]
+pub fn theta<B: AsRef<[u8]>>(values: impl IntoIterator<Item = B>) -> CompactThetaSketch {
+    let mut sketch = ThetaSketchBuilder::default()
+        .build()
+        .expect("the default parameters are valid");
+    for v in values {
+        sketch.update(raw_bytes::from_slice(v.as_ref()));
+    }
+    sketch.compact(true)
+}
+
 /// A vertex type's Puffin file: one Theta sketch per property of every group, over `table`, the
 /// type's whole table (a column per property, by name), each with its `ndv`.
 ///
@@ -283,10 +297,7 @@ pub fn puffin(info: &VertexInfo, table: &RecordBatch) -> Result<Vec<u8>, Error> 
         let array = table
             .column_by_name(&p.name)
             .ok_or_else(|| Error::Missing(p.name.clone()))?;
-        let mut sketch = Sketch::default();
-        for bytes in value_bytes(&elements(array))?.into_iter().flatten() {
-            sketch.update(&bytes);
-        }
+        let sketch = theta(value_bytes(&elements(array))?.into_iter().flatten());
         blobs.push(puffin::Blob {
             r#type: puffin::THETA.to_owned(),
             fields: vec![field],

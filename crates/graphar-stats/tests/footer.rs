@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use arrow_array::types::Int64Type;
 use arrow_array::{ArrayRef, Int64Array, ListArray, RecordBatch, StringArray};
+use datasketches::theta::CompactThetaSketch;
 use futures::executor::block_on;
 use graphar_info::{
     Cardinality, DataType, FileType, InfoVersion, Property, PropertyGroup, VertexInfo,
 };
 use graphar_parquet::{Options, paths, write_vertices};
-use graphar_stats::{ColumnStats, FOOTER_KEY, Stats, puffin, puffin_path, theta};
+use graphar_stats::{ColumnStats, FOOTER_KEY, Stats, puffin, puffin_path};
 use object_store::{ObjectStoreExt, memory::InMemory, path::Path};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 
@@ -136,7 +137,9 @@ fn each_chunk_carries_its_own_counts_and_the_puffin_file_the_tables() {
             (
                 m.fields[0],
                 m.properties["ndv"].as_str(),
-                theta::estimate_serialized(data),
+                CompactThetaSketch::deserialize(data)
+                    .ok()
+                    .map(|s| s.estimate()),
             )
         })
         .collect();

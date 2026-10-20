@@ -11,5 +11,5 @@ open("theta-one.hex", "w").write(s.compact().serialize().hex() + "\n")
 open("theta-empty.hex", "w").write(update_theta_sketch().compact().serialize().hex() + "\n")
 ```
 
-`tests/sketch.rs` holds `graphar_stats::Sketch` to them byte for byte. `tests/read_sketch.py` (run
+`tests/sketch.rs` holds `graphar_stats::theta`, Apache DataSketches' Rust port, to them byte for byte. `tests/read_sketch.py` (run
 by CI) checks the other direction: the library reads what the crate writes in estimation mode.

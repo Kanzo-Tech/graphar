@@ -20,6 +20,7 @@ parquet.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+datasketches.workspace = true
 
 [dev-dependencies]
 futures = { version = "0.3", default-features = false, features = ["executor"] }

@@ -2,7 +2,7 @@
 
     cargo run -q -p graphar-stats --example theta | python3 -I crates/graphar-stats/tests/read_sketch.py
 
-Needs `pip install datasketches==5.2.0`. The exact forms are held byte for byte by tests/sketch.rs.
+Needs `pip install datasketches==5.2.0`. The exact forms are held byte for byte by tests/sketch.rs; this checks the estimation mode, where the Rust port and the Python bindings may keep different hash tables.
 """
 
 import sys

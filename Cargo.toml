@@ -23,6 +23,8 @@ arrow-select = "58"
 # Every value as text, for the commonest values and the RDF lexical forms.
 arrow-cast = { version = "58", default-features = false }
 serde_json = "1"
+# Apache DataSketches, the reference: Theta sketches for a table's distinct counts.
+datasketches = { version = "0.5.0", default-features = false, features = ["theta"] }
 # RDF terms and Turtle/N-Triples, from Oxigraph: published, no runtime, and they build for wasm32.
 oxrdf = "0.3"
 oxttl = "0.2"
