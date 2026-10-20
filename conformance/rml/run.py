@@ -11,8 +11,15 @@ The mapping is run **as written**, but for three defects of Morph-KGC 2.10 that 
 avoid, each a rewrite here (findings F6 to F8 of the run over fossil's programs, 2026-10-19):
 F6, it reads only its own rml:tableName/rml:query and ignores RML-IO's rml:iterator with a SQL2008
 formulation, giving zero triples and no error; F7, a source column named `subject` is overwritten
-by its own working column; F8, an SQL NULL becomes the literal "None" unless na_values says so.
+(or `predicate`, `object`, `graph`) is overwritten by its own working column of that name; F8, an SQL NULL becomes the literal "None" unless na_values says so.
 RMLMapper needs only what every processor needs, a database for the abstract rml:source (F4).
+
+Two defects of RMLMapper 8.1.0 are not rewritten but **explained**: a difference counts as one only
+if every missing triple has its extra twin and the pair is that defect. F5: a boolean read from
+PostgreSQL is written "t"/"f" where R2RML's natural mapping says "true"/"false". F9: a datatype
+map by reference (RML-Core's rml:datatypeMap) is ignored, and the literal is xsd:string. A
+processor whose differences are all explained is reported `equal: false, explained: true`, and
+does not fail the run.
 
 Needs: duckdb, rdflib, morph-kgc==2.10.0, duckdb-engine, psycopg2-binary; Java and the RMLMapper
 jar for RMLMapper.
@@ -20,12 +27,14 @@ jar for RMLMapper.
 
 import argparse
 import json
+import logging
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import duckdb
+import rdflib
 from rdflib import RDF, BNode, Graph, Literal, URIRef
 from rdflib.compare import graph_diff, to_isomorphic
 
@@ -33,6 +42,14 @@ RML = "http://w3id.org/rml/"
 D2RQ = "http://www.wiwiss.fu-berlin.de/suhl/bizer/D2RQ/0.1#"
 XS = URIRef("http://www.w3.org/2001/XMLSchema#string")
 BASE = "http://graphar-rdf.invalid/mapping.ttl"
+# Morph-KGC's working columns (F7).
+CLASH = ("subject", "predicate", "object", "graph")
+
+# A literal is compared as written: "031"^^xsd:integer is not "31"^^xsd:integer.
+rdflib.NORMALIZE_LITERALS = False
+# rdflib logs every literal it cannot map to a Python value ("1985-13-01"^^xsd:date): those are
+# data, kept as written.
+logging.getLogger("rdflib").setLevel(logging.CRITICAL)
 
 
 def canon(g):
@@ -133,20 +150,22 @@ def refs_under(g, node, seen=None):
 
 
 def morph_mapping(graph, work):
-    """F6 and F7: rml:iterator to rml:query, and `subject` read under another name."""
+    """F6 and F7: rml:iterator to rml:query, and the columns Morph-KGC clobbers read under other
+    names."""
     g = mapping(graph)
     for tm, ls in list(g.subject_objects(URIRef(RML + "logicalSource"))):
         kind = str(g.value(ls, URIRef(RML + "referenceFormulation"))).rsplit("/", 1)[1]
         it = str(g.value(ls, URIRef(RML + "iterator")))
         inner = f"SELECT * FROM {it}" if kind == "SQL2008Table" else it
-        clash = "subject" in refs_under(g, tm)
+        clash = [c for c in CLASH if c in refs_under(g, tm)]
         g.remove((ls, URIRef(RML + "iterator"), None))
         g.remove((ls, URIRef(RML + "source"), None))
-        extra = ', q."subject" AS "subject__"' if clash else ""
+        extra = "".join(f', q."{c}" AS "{c}__"' for c in clash)
         g.add((ls, URIRef(RML + "query"), Literal(f"SELECT q.*{extra} FROM ({inner}) AS q")))
         g.set((ls, URIRef(RML + "referenceFormulation"), URIRef(RML + "SQL2008")))
-    for node, p, o in list(g.triples((None, URIRef(RML + "reference"), Literal("subject")))):
-        g.set((node, p, Literal("subject__")))
+    for node, p, o in list(g.triples((None, URIRef(RML + "reference"), None))):
+        if str(o) in CLASH:
+            g.set((node, p, Literal(f"{o}__")))
     out = work / "morph.ttl"
     g.serialize(str(out), format="turtle")
     return out
@@ -192,11 +211,41 @@ def tail(s, n=8):
     return "\n".join([l for l in s.strip().splitlines() if l.strip()][-n:])
 
 
+XSD_BOOLEAN = URIRef("http://www.w3.org/2001/XMLSchema#boolean")
+
+
+def defect(want, got):
+    """The processor defect that turns the triple `want` into `got`, if one does."""
+    if want[:2] != got[:2] or not isinstance(want[2], Literal) or not isinstance(got[2], Literal):
+        return None
+    w, g = want[2], got[2]
+    if w.datatype == g.datatype == XSD_BOOLEAN and (str(w), str(g)) in {("true", "t"), ("false", "f")}:
+        return "F5"
+    if str(w) == str(g) and g.datatype == XS and w.datatype not in (None, XS) and w.language is None:
+        return "F9"
+    return None
+
+
 def compare(expected, got):
     _, missing, extra = graph_diff(to_isomorphic(expected), to_isomorphic(got))
     show = lambda g: sorted(" ".join(x.n3() for x in t) for t in g)[:8]
-    return {"triples": len(got), "equal": len(missing) == 0 and len(extra) == 0,
-            "missing": show(missing), "extra": show(extra)}
+    explained = {}
+    unmatched = list(extra)
+    for want in missing:
+        twin = next(((g, d) for g in unmatched if (d := defect(want, g))), None)
+        if twin is None:
+            explained = None
+            break
+        unmatched.remove(twin[0])
+        explained[twin[1]] = explained.get(twin[1], 0) + 1
+    equal = len(missing) == 0 and len(extra) == 0
+    out = {"triples": len(got), "equal": equal}
+    if not equal:
+        out["explained"] = explained is not None and not unmatched
+        out["defects"] = explained or {}
+        out["missing"] = show(missing)
+        out["extra"] = show(extra)
+    return out
 
 
 def main():
@@ -231,7 +280,7 @@ def main():
                 report[name] = compare(expected, run())
             except Exception as e:  # noqa: BLE001 - every failure is a result to report
                 report[name] = {"error": str(e)[-800:]}
-            ok = ok and report[name].get("equal", False)
+            ok = ok and (report[name].get("equal") or report[name].get("explained", False))
     print(json.dumps(report, indent=1, ensure_ascii=False))
     sys.exit(0 if ok else 1)
 

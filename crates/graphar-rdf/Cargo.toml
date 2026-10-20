@@ -32,3 +32,9 @@ object_store = { workspace = true, features = ["fs"] }
 
 [lints]
 workspace = true
+
+# `oxrdf` draws a fresh blank node from `rand`, whose `getrandom` has no source on
+# wasm32-unknown-unknown but the browser's: `wasm_js`, with the `getrandom_backend` cfg in
+# `.cargo/config.toml` (a host that builds for wasm32 sets the same cfg, as fossil does).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
