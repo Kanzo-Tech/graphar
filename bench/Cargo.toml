@@ -22,6 +22,13 @@ futures = { version = "0.3", default-features = false, features = ["executor"] }
 flate2 = "1"
 # HDT, the baseline for compact queryable RDF: converted from N-Triples and queried by pattern.
 hdt = { version = "0.7", default-features = false, features = ["nt"] }
+# Zarr, the layout of the earlier Zarr paper. 0.22: 0.23 needs Rust 1.91.
+zarrs = { version = "0.22", default-features = false, features = ["filesystem", "gzip"] }
+# Remote access: DataFusion reads GAR and SPO through an object_store that counts every request.
+datafusion = { version = "54", default-features = false, features = ["parquet", "sql", "nested_expressions"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+async-trait = "0.1"
+url = "2"
 # DuckDB reads GAR and SPO, through the same engine.
 duckdb = { version = "1.10502", features = ["bundled", "parquet"] }
 

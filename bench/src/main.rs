@@ -5,21 +5,24 @@
 //! cargo run --release -p graphar-bench -- [--scales 1,10,60] [--runs 5] [--work DIR] [--out bench/results.json]
 //! ```
 //!
-//! For each scale of the synthetic dataset ([`generate`]) it writes the same triples five ways —
-//! N-Triples, N-Triples gzipped, HDT, an S/P/O Parquet table (SPO) and GraphAr through
-//! `graphar-rdf` (GAR) — and records each one's size, the time to write it, the share of GAR's
-//! write spent counting (`graphar-stats`), and the time of six accesses: the triples of one
-//! subject, of one predicate, of one predicate and object, a date range, and the out- and
-//! in-neighbourhood of a vertex. GAR and SPO are read by DuckDB, HDT by the `hdt` crate, and
-//! N-Triples, which has no access path, is timed by a full parse. Every layout's answer to every
-//! access is counted, and the counts must agree, or the run fails.
+//! For each scale of the synthetic dataset ([`generate`]) it writes the same triples six ways —
+//! N-Triples, N-Triples gzipped, HDT, an S/P/O Parquet table (SPO), GraphAr through `graphar-rdf`
+//! (GAR) and the Zarr layout of the earlier Zarr paper ([`zarr`]) — and records each one's size,
+//! the time to write it, the share of GAR's write spent counting (`graphar-stats`), and six
+//! accesses: the triples of one subject, of one predicate, of one predicate and object, a date
+//! range, and the out- and in-neighbourhood of a vertex. Each access is timed on local files (GAR
+//! and SPO read by DuckDB, HDT by the `hdt` crate, Zarr by its layout's reader; N-Triples, which
+//! has no access path, by a full parse), and counted in requests and bytes over object storage,
+//! cold ([`remote`]). Every layout's answer to every access is counted, and the counts must agree,
+//! or the run fails.
 //!
-//! Every time is the median of `--runs` runs after one unmeasured run. Files are local; remote
-//! access over object storage is not measured here.
+//! Every time is the median of `--runs` runs after one unmeasured run.
 
 mod generate;
 mod layouts;
 mod queries;
+mod remote;
+mod zarr;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -114,7 +117,7 @@ fn main() {
         std::fs::create_dir_all(&dir).expect("the dataset directory");
         let written = layouts::write_all(&dir, &triples, a.runs);
         eprintln!(
-            "scale {scale}: {} triples written five ways; accessing",
+            "scale {scale}: {} triples written six ways; accessing",
             triples.len()
         );
         let access = queries::run_all(&dir, &written, a.runs);
@@ -129,6 +132,7 @@ fn main() {
             "load_seconds": access.load_seconds,
             "access_seconds": access.seconds,
             "access_rows": access.rows,
+            "access_remote": access.remote,
         }));
     }
     let results = json!({

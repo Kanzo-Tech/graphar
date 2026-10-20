@@ -1,4 +1,5 @@
-//! The six accesses, on every layout that has an access path, and the time to load N-Triples.
+//! The six accesses, on every layout that has an access path, and the time to load N-Triples:
+//! timed on local files, and counted in requests and bytes over object storage ([`crate::remote`]).
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -8,7 +9,7 @@ use graphar_rdf::{Cardinality, Object, Schema, Storage};
 use serde_json::{Map, Value, json};
 
 use crate::layouts::Written;
-use crate::timed;
+use crate::{remote, timed, zarr};
 
 const UB: &str = "http://lubm.example.org/";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -18,6 +19,7 @@ pub struct Access {
     pub load_seconds: Value,
     pub seconds: Value,
     pub rows: Value,
+    pub remote: Value,
 }
 
 /// One access, as each layout asks it.
@@ -161,7 +163,7 @@ fn gar_views(dir: &Path, schema: &Schema) -> (String, Vec<(String, String)>) {
             let col = quoted(&c.name);
             let tagged = c.storage() == Storage::LangString || c.object == Object::LangString;
             let value = if tagged {
-                "(v).\"value\""
+                "v['value']"
             } else {
                 "CAST(v AS VARCHAR)"
             };
@@ -183,8 +185,8 @@ fn gar_views(dir: &Path, schema: &Schema) -> (String, Vec<(String, String)>) {
             e.predicate.clone(),
             format!(
                 "SELECT s.subject, {} AS predicate, d.subject AS object FROM {} AS e \
-                 JOIN {} AS s ON e._graphArSrcIndex = s._graphArVertexIndex \
-                 JOIN {} AS d ON e._graphArDstIndex = d._graphArVertexIndex",
+                 JOIN {} AS s ON e.\"_graphArSrcIndex\" = s.\"_graphArVertexIndex\" \
+                 JOIN {} AS d ON e.\"_graphArDstIndex\" = d.\"_graphArVertexIndex\"",
                 lit(&e.predicate),
                 quoted(&e.triple()),
                 quoted(&e.source),
@@ -212,7 +214,31 @@ fn count(con: &Connection, sql: &str) -> u64 {
         .unwrap_or_else(|e| panic!("{sql}: {e}")) as u64
 }
 
-/// Every access on SPO, GAR and HDT, and N-Triples' and HDT's load times.
+/// A term of an HDT pattern as Zarr's dictionaries hold it.
+fn zarr_term(t: &str) -> String {
+    match t.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        Some(simple) => simple.to_owned(),
+        None => format!("<{t}>"),
+    }
+}
+
+/// GAR's tables, as the directories under its root that hold their chunks.
+fn gar_tables(schema: &Schema) -> crate::remote::Tables {
+    let mut out: crate::remote::Tables = schema
+        .vertices
+        .iter()
+        .map(|v| (v.label.clone(), format!("vertex/{}/properties/", v.label)))
+        .collect();
+    out.extend(schema.edges.iter().map(|e| {
+        (
+            e.triple(),
+            format!("edge/{}/ordered_by_source/adj_list/", e.triple()),
+        )
+    }));
+    out
+}
+
+/// Every access on SPO, GAR, HDT and Zarr, and N-Triples' and HDT's load times.
 pub fn run_all(_dir: &Path, w: &Written, runs: usize) -> Access {
     let spo = Connection::open_in_memory().expect("DuckDB");
     spo.execute_batch(&format!(
@@ -245,19 +271,22 @@ pub fn run_all(_dir: &Path, w: &Written, runs: usize) -> Access {
         "GAR"
     );
 
+    let local_zarr = zarr::Zarr::open_local(&w.zarr);
+    let tables = gar_tables(&w.schema);
+    let rt = tokio::runtime::Runtime::new().expect("a runtime");
     let mut seconds = Map::new();
     let mut rows = Map::new();
+    let mut remote_costs = Map::new();
     for q in queries() {
         let (spo_s, spo_n) = timed(runs, || count(&spo, &q.triples_sql));
         // GAR twice: through the view of every triples map, and through the ones that can hold
         // the bound predicate (or the typed table, for the date range).
         let (view_s, view_n) = timed(runs, || count(&gar, &q.triples_sql));
-        let routed = q.gar_sql.clone().unwrap_or_else(|| match &q.hdt.1 {
-            Some(p) => q.triples_sql.replace(
+        let routed = q.gar_sql.clone().unwrap_or_else(|| {
+            q.triples_sql.replace(
                 "FROM rdf",
-                &format!("FROM ({}) AS rdf", union(&branches, Some(p))),
-            ),
-            None => q.triples_sql.clone(),
+                &format!("FROM ({}) AS rdf", union(&branches, q.hdt.1.as_deref())),
+            )
         });
         let (gar_s, gar_n) = timed(runs, || count(&gar, &routed));
         let (hdt_s, hdt_n) = timed(runs, || {
@@ -266,20 +295,50 @@ pub fn run_all(_dir: &Path, w: &Written, runs: usize) -> Access {
                 .filter(|t| q.hdt_filter.is_none_or(|f| f(t[2].as_ref())))
                 .count() as u64
         });
+        let pattern = zarr::Pattern {
+            terms: [&q.hdt.0, &q.hdt.1, &q.hdt.2].map(|t| t.as_deref().map(zarr_term)),
+            object_filter: q.hdt_filter.as_ref().map(|f| f as &dyn Fn(&str) -> bool),
+        };
+        let (zarr_s, zarr_n) = timed(runs, || local_zarr.count(&pattern));
         assert!(
-            spo_n == gar_n && gar_n == hdt_n && view_n == gar_n,
-            "{}: SPO {spo_n}, GAR {gar_n} (view {view_n}), HDT {hdt_n}",
+            spo_n == gar_n && gar_n == hdt_n && view_n == gar_n && zarr_n == gar_n,
+            "{}: SPO {spo_n}, GAR {gar_n} (view {view_n}), HDT {hdt_n}, Zarr {zarr_n}",
             q.name
         );
         seconds.insert(
             q.name.to_owned(),
-            json!({"spo": spo_s, "gar": gar_s, "gar_view": view_s, "hdt": hdt_s}),
+            json!({"spo": spo_s, "gar": gar_s, "gar_view": view_s, "hdt": hdt_s, "zarr": zarr_s}),
         );
         rows.insert(q.name.to_owned(), json!(gar_n));
+
+        // Over object storage, cold: requests and bytes, and the same answer.
+        let spo_dir = w.spo.parent().expect("a directory");
+        let spo_file = w.spo.file_name().expect("a file").to_string_lossy();
+        let spo_tables = vec![("rdf".to_owned(), spo_file.into_owned())];
+        let (spo_r, spo_cost) =
+            rt.block_on(remote::count_sql(spo_dir, &spo_tables, &q.triples_sql));
+        let (gar_r, gar_cost) = rt.block_on(remote::count_sql(&w.gar, &tables, &routed));
+        let (zarr_r, zarr_cost) = remote::count_zarr(&w.zarr, &pattern);
+        assert!(
+            spo_r == gar_n && gar_r == gar_n && zarr_r == gar_n,
+            "{} remote: SPO {spo_r}, GAR {gar_r}, Zarr {zarr_r}, local {gar_n}",
+            q.name
+        );
+        remote_costs.insert(
+            q.name.to_owned(),
+            json!({
+                "spo": spo_cost,
+                "gar": gar_cost,
+                "zarr": zarr_cost,
+                "hdt": remote::whole(&w.hdt),
+                "nt_gz": remote::whole(&w.nt.with_extension("nt.gz")),
+            }),
+        );
     }
     Access {
         load_seconds: json!({"nt_parse": nt_seconds, "hdt_open": hdt_load}),
         seconds: Value::Object(seconds),
         rows: Value::Object(rows),
+        remote: Value::Object(remote_costs),
     }
 }

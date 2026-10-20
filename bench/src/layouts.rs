@@ -1,4 +1,4 @@
-//! The same triples written five ways, each timed and measured on disk.
+//! The same triples written six ways, each timed and measured on disk.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -26,6 +26,7 @@ pub struct Written {
     pub hdt: PathBuf,
     pub spo: PathBuf,
     pub gar: PathBuf,
+    pub zarr: PathBuf,
     pub gar_summary: Value,
     pub sizes: Value,
     pub write_seconds: Value,
@@ -51,6 +52,18 @@ fn size(path: &Path) -> u64 {
             .sum()
     } else {
         std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+    }
+}
+
+/// The number of files under `path`: a request each, to read them all from a bucket.
+fn files(path: &Path) -> u64 {
+    if path.is_dir() {
+        std::fs::read_dir(path)
+            .expect("a directory")
+            .map(|e| files(&e.expect("an entry").path()))
+            .sum()
+    } else {
+        u64::from(path.exists())
     }
 }
 
@@ -119,7 +132,7 @@ fn write_gar(dir: &Path, schema: &Schema, triples: &[Triple], stats: bool) -> gr
     .expect("GAR written")
 }
 
-/// Writes `triples` as N-Triples, gzipped N-Triples, HDT, SPO and GAR under `dir`.
+/// Writes `triples` as N-Triples, gzipped N-Triples, HDT, SPO, GAR and Zarr under `dir`.
 pub fn write_all(dir: &Path, triples: &[Triple], runs: usize) -> Written {
     let schema = shapes::shacl::from_turtle(generate::SHAPES).expect("the shapes");
     let nt = dir.join("data.nt");
@@ -156,12 +169,18 @@ pub fn write_all(dir: &Path, triples: &[Triple], runs: usize) -> Written {
     let (gar_bare_seconds, _) = timed(runs, || write_gar(&gar, &schema, triples, false));
     let (gar_seconds, summary) = timed(runs, || write_gar(&gar, &schema, triples, true));
 
+    let zarr = dir.join("zarr");
+    let (zarr_seconds, ()) = timed(runs, || crate::zarr::write(&zarr, triples));
+
     let sizes = json!({
         "nt": size(&nt),
         "nt_gz": size(&nt_gz),
         "hdt": size(&hdt),
         "spo": size(&spo),
         "gar": size(&gar),
+        "zarr": size(&zarr),
+        "zarr_files": files(&zarr),
+        "gar_files": files(&gar),
         "gar_mapping_ttl": size(&gar.join(graphar_rdf::MAPPING_FILE)),
         "gar_puffin": summary.info.vertices.iter().map(|v| size(&gar.join(graphar_stats::puffin_path(v)))).sum::<u64>(),
     });
@@ -176,6 +195,7 @@ pub fn write_all(dir: &Path, triples: &[Triple], runs: usize) -> Written {
         hdt,
         spo,
         gar,
+        zarr,
         sizes,
         write_seconds: json!({
             "nt_gz": gz_seconds,
@@ -183,6 +203,7 @@ pub fn write_all(dir: &Path, triples: &[Triple], runs: usize) -> Written {
             "spo": spo_seconds,
             "gar": gar_seconds,
             "gar_without_stats": gar_bare_seconds,
+            "zarr": zarr_seconds,
         }),
         stats_share: ((gar_seconds - gar_bare_seconds) / gar_seconds).max(0.0),
     }
