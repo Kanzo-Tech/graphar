@@ -1,0 +1,1114 @@
+{
+  "generated_by": "cargo run --release -p graphar-bench",
+  "commit": "26dc0b10fae6951fa48df53197805e298dce368c",
+  "dirty": false,
+  "date": "2026-10-20T14:51:20Z",
+  "host": {
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "cores": 4,
+    "memory_gib": 15.7,
+    "os": "Linux 6.18.44-fc-v139"
+  },
+  "runs": 5,
+  "gar_chunk_size": 65536,
+  "timing": "median of `runs` runs after one unmeasured run; local files",
+  "versions": {
+    "duckdb": "v1.5.6",
+    "hdt": "hdt 0.7 (Rust)",
+    "parquet": "parquet 58 (Rust), zstd level 3 for GAR and SPO"
+  },
+  "datasets": [
+    {
+      "dataset": "lubm-synthetic",
+      "scale": 1,
+      "triples": 17027,
+      "gar": {
+        "vertices": [
+          {
+            "type": "University",
+            "rows": 1
+          },
+          {
+            "type": "Department",
+            "rows": 15
+          },
+          {
+            "type": "Professor",
+            "rows": 150
+          },
+          {
+            "type": "Student",
+            "rows": 1200
+          },
+          {
+            "type": "Course",
+            "rows": 300
+          },
+          {
+            "type": "Publication",
+            "rows": 450
+          }
+        ],
+        "edges": [
+          {
+            "type": "Department_subOrganizationOf_University",
+            "edges": 15
+          },
+          {
+            "type": "Professor_worksFor_Department",
+            "edges": 150
+          },
+          {
+            "type": "Professor_teacherOf_Course",
+            "edges": 295
+          },
+          {
+            "type": "Student_memberOf_Department",
+            "edges": 1200
+          },
+          {
+            "type": "Student_advisor_Professor",
+            "edges": 1200
+          },
+          {
+            "type": "Student_takesCourse_Course",
+            "edges": 3396
+          },
+          {
+            "type": "Publication_publicationAuthor_Professor",
+            "edges": 838
+          }
+        ]
+      },
+      "size_bytes": {
+        "nt": 2464395,
+        "nt_gz": 100079,
+        "hdt": 178068,
+        "spo": 60042,
+        "gar": 81474,
+        "zarr": 867542,
+        "zarr_files": 7671,
+        "gar_files": 55,
+        "gar_mapping_ttl": 9793,
+        "gar_puffin": 0
+      },
+      "write_seconds": {
+        "nt_gz": 0.011675786,
+        "hdt": 0.045576898,
+        "spo": 0.017160403,
+        "gar": 0.042827888,
+        "gar_without_stats": 0.047811582,
+        "zarr": 8.618751276
+      },
+      "stats_share": 0.0,
+      "load_seconds": {
+        "nt_parse": 0.018201884,
+        "hdt_open": 0.002594615
+      },
+      "access_seconds": {
+        "subject": {
+          "spo": 0.001507014,
+          "gar": 0.025105,
+          "gar_view": 0.026913943,
+          "hdt": 5.518e-6,
+          "zarr": 6.53e-6
+        },
+        "predicate": {
+          "spo": 0.001351039,
+          "gar": 0.003235052,
+          "gar_view": 0.016676973,
+          "hdt": 0.001338007,
+          "zarr": 0.000072414
+        },
+        "predicate_object": {
+          "spo": 0.002555752,
+          "gar": 0.00539871,
+          "gar_view": 0.022878341,
+          "hdt": 6.947e-6,
+          "zarr": 0.000072703
+        },
+        "date_range": {
+          "spo": 0.002473299,
+          "gar": 0.001972132,
+          "gar_view": 0.026096848,
+          "hdt": 0.00192032,
+          "zarr": 0.000133099
+        },
+        "out_neighbourhood": {
+          "spo": 0.001895126,
+          "gar": 0.00427786,
+          "gar_view": 0.022986237,
+          "hdt": 2.445e-6,
+          "zarr": 6.962e-6
+        },
+        "in_neighbourhood": {
+          "spo": 0.001922176,
+          "gar": 0.005491541,
+          "gar_view": 0.021224422,
+          "hdt": 2.357e-6,
+          "zarr": 0.000085431
+        }
+      },
+      "access_rows": {
+        "subject": 10,
+        "predicate": 3396,
+        "predicate_object": 15,
+        "date_range": 72,
+        "out_neighbourhood": 4,
+        "in_neighbourhood": 6
+      },
+      "access_remote": {
+        "subject": {
+          "spo": {
+            "requests": 4,
+            "gets": 2,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 68821
+          },
+          "gar": {
+            "requests": 63,
+            "gets": 50,
+            "heads": 0,
+            "lists": 13,
+            "bytes": 62136
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 492782
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 178068
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 100079
+          }
+        },
+        "predicate": {
+          "spo": {
+            "requests": 4,
+            "gets": 2,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 62404
+          },
+          "gar": {
+            "requests": 10,
+            "gets": 7,
+            "heads": 0,
+            "lists": 3,
+            "bytes": 28850
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 501944
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 178068
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 100079
+          }
+        },
+        "predicate_object": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 107909
+          },
+          "gar": {
+            "requests": 11,
+            "gets": 6,
+            "heads": 0,
+            "lists": 5,
+            "bytes": 32433
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 498731
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 178068
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 100079
+          }
+        },
+        "date_range": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 107909
+          },
+          "gar": {
+            "requests": 3,
+            "gets": 2,
+            "heads": 0,
+            "lists": 1,
+            "bytes": 21801
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 497917
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 178068
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 100079
+          }
+        },
+        "out_neighbourhood": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 71183
+          },
+          "gar": {
+            "requests": 11,
+            "gets": 8,
+            "heads": 0,
+            "lists": 3,
+            "bytes": 32134
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 492782
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 178068
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 100079
+          }
+        },
+        "in_neighbourhood": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 107909
+          },
+          "gar": {
+            "requests": 11,
+            "gets": 8,
+            "heads": 0,
+            "lists": 3,
+            "bytes": 29778
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 501944
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 178068
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 100079
+          }
+        }
+      }
+    },
+    {
+      "dataset": "lubm-synthetic",
+      "scale": 10,
+      "triples": 170442,
+      "gar": {
+        "vertices": [
+          {
+            "type": "University",
+            "rows": 10
+          },
+          {
+            "type": "Department",
+            "rows": 150
+          },
+          {
+            "type": "Professor",
+            "rows": 1500
+          },
+          {
+            "type": "Student",
+            "rows": 12000
+          },
+          {
+            "type": "Course",
+            "rows": 3000
+          },
+          {
+            "type": "Publication",
+            "rows": 4500
+          }
+        ],
+        "edges": [
+          {
+            "type": "Department_subOrganizationOf_University",
+            "edges": 150
+          },
+          {
+            "type": "Professor_worksFor_Department",
+            "edges": 1500
+          },
+          {
+            "type": "Professor_teacherOf_Course",
+            "edges": 2924
+          },
+          {
+            "type": "Student_memberOf_Department",
+            "edges": 12000
+          },
+          {
+            "type": "Student_advisor_Professor",
+            "edges": 12000
+          },
+          {
+            "type": "Student_takesCourse_Course",
+            "edges": 34130
+          },
+          {
+            "type": "Publication_publicationAuthor_Professor",
+            "edges": 8408
+          }
+        ]
+      },
+      "size_bytes": {
+        "nt": 24672104,
+        "nt_gz": 1000637,
+        "hdt": 1341464,
+        "spo": 588123,
+        "gar": 416594,
+        "zarr": 7757080,
+        "zarr_files": 67101,
+        "gar_files": 55,
+        "gar_mapping_ttl": 9793,
+        "gar_puffin": 0
+      },
+      "write_seconds": {
+        "nt_gz": 0.154650641,
+        "hdt": 0.442540209,
+        "spo": 0.193427791,
+        "gar": 0.607057272,
+        "gar_without_stats": 0.625279301,
+        "zarr": 65.073988962
+      },
+      "stats_share": 0.0,
+      "load_seconds": {
+        "nt_parse": 0.210172353,
+        "hdt_open": 0.020165515
+      },
+      "access_seconds": {
+        "subject": {
+          "spo": 0.004297271,
+          "gar": 0.025680783,
+          "gar_view": 0.025872254,
+          "hdt": 5.394e-6,
+          "zarr": 9.851e-6
+        },
+        "predicate": {
+          "spo": 0.00260506,
+          "gar": 0.004654443,
+          "gar_view": 0.019681331,
+          "hdt": 0.013692109,
+          "zarr": 0.000722901
+        },
+        "predicate_object": {
+          "spo": 0.006304799,
+          "gar": 0.005342311,
+          "gar_view": 0.017131077,
+          "hdt": 0.000032007,
+          "zarr": 0.000577002
+        },
+        "date_range": {
+          "spo": 0.008061643,
+          "gar": 0.00149367,
+          "gar_view": 0.019522831,
+          "hdt": 0.013317623,
+          "zarr": 0.001167358
+        },
+        "out_neighbourhood": {
+          "spo": 0.006244731,
+          "gar": 0.006264258,
+          "gar_view": 0.028395641,
+          "hdt": 4.787e-6,
+          "zarr": 0.000010129
+        },
+        "in_neighbourhood": {
+          "spo": 0.006355783,
+          "gar": 0.005100025,
+          "gar_view": 0.021477211,
+          "hdt": 4.151e-6,
+          "zarr": 0.000948752
+        }
+      },
+      "access_rows": {
+        "subject": 10,
+        "predicate": 34130,
+        "predicate_object": 150,
+        "date_range": 802,
+        "out_neighbourhood": 4,
+        "in_neighbourhood": 6
+      },
+      "access_remote": {
+        "subject": {
+          "spo": {
+            "requests": 4,
+            "gets": 2,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 544043
+          },
+          "gar": {
+            "requests": 69,
+            "gets": 56,
+            "heads": 0,
+            "lists": 13,
+            "bytes": 368391
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 4200088
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1341464
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1000637
+          }
+        },
+        "predicate": {
+          "spo": {
+            "requests": 4,
+            "gets": 2,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 545328
+          },
+          "gar": {
+            "requests": 10,
+            "gets": 7,
+            "heads": 0,
+            "lists": 3,
+            "bytes": 200475
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 4291976
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1341464
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1000637
+          }
+        },
+        "predicate_object": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 965898
+          },
+          "gar": {
+            "requests": 11,
+            "gets": 6,
+            "heads": 0,
+            "lists": 5,
+            "bytes": 175332
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 4267344
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1341464
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1000637
+          }
+        },
+        "date_range": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 965898
+          },
+          "gar": {
+            "requests": 3,
+            "gets": 2,
+            "heads": 0,
+            "lists": 1,
+            "bytes": 161880
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 4255163
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1341464
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1000637
+          }
+        },
+        "out_neighbourhood": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 546758
+          },
+          "gar": {
+            "requests": 11,
+            "gets": 8,
+            "heads": 0,
+            "lists": 3,
+            "bytes": 224419
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 4200089
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1341464
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1000637
+          }
+        },
+        "in_neighbourhood": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 965898
+          },
+          "gar": {
+            "requests": 11,
+            "gets": 8,
+            "heads": 0,
+            "lists": 3,
+            "bytes": 209261
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 4291976
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1341464
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 1000637
+          }
+        }
+      }
+    },
+    {
+      "dataset": "lubm-synthetic",
+      "scale": 60,
+      "triples": 1022466,
+      "gar": {
+        "vertices": [
+          {
+            "type": "University",
+            "rows": 60
+          },
+          {
+            "type": "Department",
+            "rows": 900
+          },
+          {
+            "type": "Professor",
+            "rows": 9000
+          },
+          {
+            "type": "Student",
+            "rows": 72000
+          },
+          {
+            "type": "Course",
+            "rows": 18000
+          },
+          {
+            "type": "Publication",
+            "rows": 27000
+          }
+        ],
+        "edges": [
+          {
+            "type": "Department_subOrganizationOf_University",
+            "edges": 900
+          },
+          {
+            "type": "Professor_worksFor_Department",
+            "edges": 9000
+          },
+          {
+            "type": "Professor_teacherOf_Course",
+            "edges": 17542
+          },
+          {
+            "type": "Student_memberOf_Department",
+            "edges": 72000
+          },
+          {
+            "type": "Student_advisor_Professor",
+            "edges": 72000
+          },
+          {
+            "type": "Student_takesCourse_Course",
+            "edges": 204619
+          },
+          {
+            "type": "Publication_publicationAuthor_Professor",
+            "edges": 50425
+          }
+        ]
+      },
+      "size_bytes": {
+        "nt": 149353592,
+        "nt_gz": 6004566,
+        "hdt": 6712175,
+        "spo": 3815941,
+        "gar": 2236018,
+        "zarr": 43489709,
+        "zarr_files": 362529,
+        "gar_files": 68,
+        "gar_mapping_ttl": 9793,
+        "gar_puffin": 132109
+      },
+      "write_seconds": {
+        "nt_gz": 0.786846531,
+        "hdt": 4.2367484619999995,
+        "spo": 1.7098025799999998,
+        "gar": 5.029237006,
+        "gar_without_stats": 4.329743316,
+        "zarr": 304.680873168
+      },
+      "stats_share": 0.1390854495752511,
+      "load_seconds": {
+        "nt_parse": 1.212793598,
+        "hdt_open": 0.13997393
+      },
+      "access_seconds": {
+        "subject": {
+          "spo": 0.043986343,
+          "gar": 0.053874149,
+          "gar_view": 0.054966498,
+          "hdt": 5.761e-6,
+          "zarr": 7.324e-6
+        },
+        "predicate": {
+          "spo": 0.007167892,
+          "gar": 0.023072602,
+          "gar_view": 0.044666059,
+          "hdt": 0.095005808,
+          "zarr": 0.005200981
+        },
+        "predicate_object": {
+          "spo": 0.036608886,
+          "gar": 0.007302621,
+          "gar_view": 0.02247175,
+          "hdt": 0.000185903,
+          "zarr": 0.003527466
+        },
+        "date_range": {
+          "spo": 0.041496143,
+          "gar": 0.002024528,
+          "gar_view": 0.024496897,
+          "hdt": 0.06824105,
+          "zarr": 0.004981751
+        },
+        "out_neighbourhood": {
+          "spo": 0.046469049,
+          "gar": 0.00877229,
+          "gar_view": 0.0345362,
+          "hdt": 3.036e-6,
+          "zarr": 7.686e-6
+        },
+        "in_neighbourhood": {
+          "spo": 0.041786378,
+          "gar": 0.006889744,
+          "gar_view": 0.023287988,
+          "hdt": 2.609e-6,
+          "zarr": 0.004568258
+        }
+      },
+      "access_rows": {
+        "subject": 10,
+        "predicate": 204619,
+        "predicate_object": 900,
+        "date_range": 4748,
+        "out_neighbourhood": 4,
+        "in_neighbourhood": 6
+      },
+      "access_remote": {
+        "subject": {
+          "spo": {
+            "requests": 4,
+            "gets": 2,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 547307
+          },
+          "gar": {
+            "requests": 75,
+            "gets": 62,
+            "heads": 0,
+            "lists": 13,
+            "bytes": 1883922
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 22634895
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6712175
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6004566
+          }
+        },
+        "predicate": {
+          "spo": {
+            "requests": 4,
+            "gets": 2,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 647810
+          },
+          "gar": {
+            "requests": 21,
+            "gets": 18,
+            "heads": 0,
+            "lists": 3,
+            "bytes": 993274
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 23184486
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6712175
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6004566
+          }
+        },
+        "predicate_object": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 2998217
+          },
+          "gar": {
+            "requests": 12,
+            "gets": 7,
+            "heads": 0,
+            "lists": 5,
+            "bytes": 809822
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 23075007
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6712175
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6004566
+          }
+        },
+        "date_range": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 2998217
+          },
+          "gar": {
+            "requests": 5,
+            "gets": 4,
+            "heads": 0,
+            "lists": 1,
+            "bytes": 738782
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 22964324
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6712175
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6004566
+          }
+        },
+        "out_neighbourhood": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 550022
+          },
+          "gar": {
+            "requests": 15,
+            "gets": 12,
+            "heads": 0,
+            "lists": 3,
+            "bytes": 902026
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 22634896
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6712175
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6004566
+          }
+        },
+        "in_neighbourhood": {
+          "spo": {
+            "requests": 5,
+            "gets": 3,
+            "heads": 2,
+            "lists": 0,
+            "bytes": 2998217
+          },
+          "gar": {
+            "requests": 16,
+            "gets": 13,
+            "heads": 0,
+            "lists": 3,
+            "bytes": 916213
+          },
+          "zarr": {
+            "requests": 5,
+            "gets": 5,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 23184486
+          },
+          "hdt": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6712175
+          },
+          "nt_gz": {
+            "requests": 1,
+            "gets": 1,
+            "heads": 0,
+            "lists": 0,
+            "bytes": 6004566
+          }
+        }
+      }
+    }
+  ]
+}
