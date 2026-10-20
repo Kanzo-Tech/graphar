@@ -90,8 +90,8 @@ fn undelimited(sql: &str) -> String {
 fn every_table_is_a_delimited_name_and_every_query_standard_sql() {
     let text = mapping(&schema()).expect("a mapping");
     let iterators = iterators(&text);
-    // Two tables, two nested columns (the set and the tagged value), one edge, eight residual maps.
-    assert_eq!(iterators.len(), 2 + 2 + 1 + 8, "{text}");
+    // Two tables, two nested columns (the set and the tagged value), one edge.
+    assert_eq!(iterators.len(), 2 + 2 + 1, "{text}");
     for it in &iterators {
         if !it.starts_with("SELECT") {
             assert!(

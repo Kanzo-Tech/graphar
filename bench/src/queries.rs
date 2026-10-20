@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use duckdb::Connection;
-use graphar_rdf::{Cardinality, Object, RESIDUAL, Schema, Storage};
+use graphar_rdf::{Cardinality, Object, Schema, Storage};
 use serde_json::{Map, Value, json};
 
 use crate::layouts::Written;
@@ -117,19 +117,13 @@ fn lit(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
-/// GAR's tables as DuckDB views over their chunks, and `rdf`, the RDF reading as one view (the
-/// residual table is `triples`): the mapping's triples maps, each a branch of a `UNION ALL`, every
-/// object as text. With the SQL, each branch and the predicate it reads, `None` for the residual
-/// table's, which may hold any.
-fn gar_views(dir: &Path, schema: &Schema) -> (String, Vec<(Option<String>, String)>) {
+/// GAR's tables as DuckDB views over their chunks, and `rdf`, the RDF reading as one view: the
+/// mapping's triples maps, each a branch of a `UNION ALL`, every object as text. With the SQL,
+/// each branch and the predicate it reads.
+fn gar_views(dir: &Path, schema: &Schema) -> (String, Vec<(String, String)>) {
     let mut sql = String::new();
     let glob = |p: String| lit(&dir.join(p).display().to_string());
-    let labels = schema
-        .vertices
-        .iter()
-        .map(|v| v.label.as_str())
-        .chain([RESIDUAL]);
-    for label in labels {
+    for label in schema.vertices.iter().map(|v| v.label.as_str()) {
         writeln!(
             sql,
             "CREATE VIEW {} AS SELECT * FROM read_parquet({});",
@@ -155,7 +149,7 @@ fn gar_views(dir: &Path, schema: &Schema) -> (String, Vec<(Option<String>, Strin
         let t = quoted(&v.label);
         if let Some(class) = &v.class {
             branches.push((
-                Some(RDF_TYPE.to_owned()),
+                RDF_TYPE.to_owned(),
                 format!(
                     "SELECT subject, {} AS predicate, {} AS object FROM {t}",
                     lit(RDF_TYPE),
@@ -176,7 +170,7 @@ fn gar_views(dir: &Path, schema: &Schema) -> (String, Vec<(Option<String>, Strin
                 Cardinality::Single => format!("SELECT subject, {col} AS v FROM {t}"),
             };
             branches.push((
-                Some(c.predicate.clone()),
+                c.predicate.clone(),
                 format!(
                     "SELECT subject, {} AS predicate, {value} AS object FROM ({rows}) WHERE v IS NOT NULL",
                     lit(&c.predicate)
@@ -186,7 +180,7 @@ fn gar_views(dir: &Path, schema: &Schema) -> (String, Vec<(Option<String>, Strin
     }
     for e in &schema.edges {
         branches.push((
-            Some(e.predicate.clone()),
+            e.predicate.clone(),
             format!(
                 "SELECT s.subject, {} AS predicate, d.subject AS object FROM {} AS e \
                  JOIN {} AS s ON e._graphArSrcIndex = s._graphArVertexIndex \
@@ -198,23 +192,16 @@ fn gar_views(dir: &Path, schema: &Schema) -> (String, Vec<(Option<String>, Strin
             ),
         ));
     }
-    branches.push((
-        None,
-        format!(
-            "SELECT subject, predicate, object FROM {}",
-            quoted(RESIDUAL)
-        ),
-    ));
     writeln!(sql, "CREATE VIEW rdf AS {};", union(&branches, None)).expect("a String");
     (sql, branches)
 }
 
 /// The branches that can hold `predicate` (all of them for none), as one `UNION ALL`: what a
 /// reader that has the mapping reads for a pattern whose predicate is bound.
-fn union(branches: &[(Option<String>, String)], predicate: Option<&str>) -> String {
+fn union(branches: &[(String, String)], predicate: Option<&str>) -> String {
     branches
         .iter()
-        .filter(|(p, _)| predicate.is_none() || p.is_none() || p.as_deref() == predicate)
+        .filter(|(p, _)| predicate.is_none_or(|q| p == q))
         .map(|(_, sql)| sql.as_str())
         .collect::<Vec<_>>()
         .join("\nUNION ALL\n")

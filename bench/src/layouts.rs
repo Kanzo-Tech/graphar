@@ -55,7 +55,7 @@ fn size(path: &Path) -> u64 {
 }
 
 /// The S/P/O row of a triple: subject, predicate and object as text, the object's datatype and
-/// language, as graphar-rdf's residual table has them.
+/// language; a blank node is `_:` and its label.
 fn spo_row(t: &Triple) -> [Option<String>; 5] {
     let subject = match &t.subject {
         NamedOrBlankNode::NamedNode(n) => n.as_str().to_owned(),
@@ -163,14 +163,13 @@ pub fn write_all(dir: &Path, triples: &[Triple], runs: usize) -> Written {
         "spo": size(&spo),
         "gar": size(&gar),
         "gar_mapping_ttl": size(&gar.join(graphar_rdf::MAPPING_FILE)),
-        "gar_puffin": summary.info.vertices.iter().map(|v| size(&gar.join(graphar_stats_path(v)))).sum::<u64>(),
+        "gar_puffin": summary.info.vertices.iter().map(|v| size(&gar.join(graphar_stats::puffin_path(v)))).sum::<u64>(),
     });
     Written {
         triples: summary.triples as usize,
         gar_summary: json!({
             "vertices": summary.vertices.iter().map(|(l, n)| json!({"type": l, "rows": n})).collect::<Vec<_>>(),
             "edges": summary.edges.iter().map(|(l, n)| json!({"type": l, "edges": n})).collect::<Vec<_>>(),
-            "residual": summary.residual,
         }),
         schema,
         nt,
@@ -187,8 +186,4 @@ pub fn write_all(dir: &Path, triples: &[Triple], runs: usize) -> Written {
         }),
         stats_share: ((gar_seconds - gar_bare_seconds) / gar_seconds).max(0.0),
     }
-}
-
-fn graphar_stats_path(v: &graphar_info::VertexInfo) -> String {
-    format!("{}stats.puffin", v.prefix)
 }

@@ -9,15 +9,15 @@ use graphar_parquet::{
     DST_INDEX_COL, SRC_INDEX_COL, paths, read_adj_list_chunk, read_count, read_vertex_chunk,
 };
 use object_store::{ObjectStore, path::Path};
-use oxrdf::{BlankNode, Literal, NamedNode, NamedOrBlankNode, Term, Triple};
+use oxrdf::{Literal, NamedNode, Term, Triple};
 
-use crate::schema::{Error, Object, RESIDUAL, Schema};
+use crate::schema::{Error, Object, Schema};
 use crate::term::civil;
 use crate::{RDF_TYPE, SUBJECT, XSD_STRING};
 
 /// **The triples of the graph under `root`**, as `mapping.ttl` reads them: for each vertex, its
 /// `rdf:type` and a triple per value of each column; for each edge, the predicate between the
-/// subjects of its ends; and each row of the residual table.
+/// subjects of its ends.
 ///
 /// # Errors
 /// What the store or the readers refuse, and a table that does not hold what `info` says.
@@ -105,40 +105,6 @@ pub async fn read(
             }
         }
     }
-    let table = table(store, root, vertex_info(info, RESIDUAL)?).await?;
-    let column = |name: &str| -> Result<&arrow_array::StringArray, Error> {
-        Ok(table
-            .column_by_name(name)
-            .ok_or_else(|| missing(RESIDUAL, name))?
-            .as_string::<i32>())
-    };
-    let (s, p, o, dt, lang) = (
-        column(SUBJECT)?,
-        column("predicate")?,
-        column("object")?,
-        column("datatype")?,
-        column("lang")?,
-    );
-    for row in 0..table.num_rows() {
-        let subject = match s.value(row).strip_prefix("_:") {
-            Some(label) => NamedOrBlankNode::from(blank(label)?),
-            None => NamedOrBlankNode::from(iri(s.value(row))?),
-        };
-        let value = o.value(row);
-        let object = if lang.is_valid(row) {
-            Term::from(
-                Literal::new_language_tagged_literal(value, lang.value(row))
-                    .map_err(|e| Error::Invalid(e.to_string()))?,
-            )
-        } else if dt.is_valid(row) {
-            Term::from(Literal::new_typed_literal(value, iri(dt.value(row))?))
-        } else if let Some(label) = value.strip_prefix("_:") {
-            Term::from(blank(label)?)
-        } else {
-            Term::from(iri(value)?)
-        };
-        out.push(Triple::new(subject, iri(p.value(row))?, object));
-    }
     Ok(out)
 }
 
@@ -155,10 +121,6 @@ fn missing(at: &str, column: &str) -> Error {
 
 fn iri(text: &str) -> Result<NamedNode, Error> {
     NamedNode::new(text).map_err(|_| Error::NotAnIri(text.to_owned()))
-}
-
-fn blank(label: &str) -> Result<BlankNode, Error> {
-    BlankNode::new(label).map_err(|e| Error::Invalid(e.to_string()))
 }
 
 fn index(subjects: &[NamedNode], id: i64) -> Result<&NamedNode, Error> {

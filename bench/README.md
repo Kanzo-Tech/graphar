@@ -14,9 +14,9 @@ of runs and the versions of the engines.
 ## What it measures
 
 The dataset is synthetic (`src/generate.rs`): universities in the shape of LUBM's, with the typed
-literals LUBM lacks (integers, dates, language-tagged labels), about 4 % of the triples outside
-the shapes (`owl:sameAs`, `rdfs:comment`, blank-node addresses, non-canonical integers), and its
-SHACL shapes. A scale is a number of universities, about 17,500 triples each.
+literals LUBM lacks (integers, dates, language-tagged labels), and its SHACL shapes, to which it
+conforms read closed, as graphar-rdf requires. A scale is a number of universities, about 17,000
+triples each.
 
 The same triples are written five ways:
 
@@ -26,7 +26,7 @@ The same triples are written five ways:
 | `nt_gz` | N-Triples, gzip default level | `flate2` |
 | `hdt` | HDT | the `hdt` crate, from the N-Triples |
 | `spo` | one Parquet table, a row per triple: `subject, predicate, object, datatype, lang` as text, sorted by subject | `parquet`, zstd |
-| `gar` | GraphAr through `graphar-rdf`, chunks of 2^16 rows: a table per class, edges, the residual table, `mapping.ttl`, the counts in every footer and a Puffin file per type of several chunks | `graphar-rdf`, zstd |
+| `gar` | GraphAr through `graphar-rdf`, chunks of 2^16 rows: a table per class, edges, `mapping.ttl`, the counts in every footer and a Puffin file per type of several chunks | `graphar-rdf`, zstd |
 
 and for each: `size_bytes`; `write_seconds` (GAR with and without `graphar-stats`, and
 `stats_share`, the share of the write spent counting); `load_seconds` (a full parse of the

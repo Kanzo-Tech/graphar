@@ -10,7 +10,7 @@ builds for `wasm32-unknown-unknown`.
 | [`graphar-info`](crates/graphar-info) | The information files: `GraphInfo`, `VertexInfo`, `EdgeInfo` and their parts, loaded from and dumped to YAML, and validated. No IO of its own |
 | [`graphar-parquet`](crates/graphar-parquet) | The data files in Parquet: vertex chunks, adjacency lists, offsets, edge properties and the count files, written and read through any [`object_store`](https://docs.rs/object_store). No runtime: its wasm32 build reaches no `tokio` |
 | [`graphar-stats`](crates/graphar-stats) | What a vertex chunk holds, counted as it is written: the distinct count and the ten commonest values of each property in the chunk's Parquet footer (key `graphar-stats`), and a [Puffin](https://iceberg.apache.org/puffin-spec/) file per vertex type with an `apache-datasketches-theta-v1` sketch per property, for the distinct count of a whole table |
-| [`graphar-rdf`](crates/graphar-rdf) | RDF in GraphAr: an RDF graph and its shapes (SHACL Core in Turtle, ShEx in ShExJ) written as a vertex table per class, an edge type per property between classes and a residual table for every other triple, with the RDF reading of those tables as an RML-Core mapping, `mapping.ttl`. `read` gives back exactly the triples written |
+| [`graphar-rdf`](crates/graphar-rdf) | RDF in GraphAr: an RDF graph and its shapes (SHACL Core in Turtle, ShEx in ShExJ) written as a vertex table per class and an edge type per property between classes, with the RDF reading of those tables as an RML-Core mapping, `mapping.ttl`. Only a graph that conforms to the closed reading of its shapes is written; `read` gives back the triples written, up to canonical lexical form |
 | [`@kanzo-tech/graphar-duckdb`](packages/graphar-duckdb) (npm) | `attachGraph`: a graph on a host's DuckDB as a catalog, a view per vertex and edge type over the Parquet chunks, and the information files as `graphar_vertex_types`, `graphar_edge_types`, `graphar_properties`, `graphar_extra_info` and `graphar_chunks` (every chunk file, by the name the host resolved it to). TypeScript only: every file is read through the engine |
 
 They are tested against every information file and the Parquet data of
@@ -57,16 +57,15 @@ and reads, has no such column.
 
 ## RDF
 
-`graphar-rdf` writes any RDF graph; its shapes decide how much of it is typed, never whether it
-is kept. A literal goes to a typed column only if the column gives its lexical form back
-(`"01"^^xsd:integer` is not `"1"^^xsd:integer`), a single-valued column with two values keeps
-neither, an object that is not a row of the edge's destination stays a triple, and all of those
-are rows of the residual table, `triples(subject, predicate, object, datatype, lang)`. The mapping
-delimits every SQL identifier and writes standard SQL, and
+`graphar-rdf` writes an RDF graph that conforms to the closed reading of its shapes (`sh:closed`,
+ShEx `CLOSED`): every subject an IRI with one `rdf:type`, the class of one shape, and every other
+triple a value of one of that shape's properties or an edge to a node of the shape it names, with
+`sh:maxCount 1` respected. Any other graph is refused before a file is written, with the first
+triple that has no place and why. A literal is stored as its value, so `"031"^^xsd:integer` reads
+back as `"31"^^xsd:integer`. The mapping delimits every SQL identifier and writes standard SQL, and
 [`conformance/rml/run.py`](conformance/rml/run.py) runs it in CI through Morph-KGC on DuckDB and
-PostgreSQL and RMLMapper on PostgreSQL, against the triples written. Two defects of RMLMapper 8.1.0
-are explained rather than hidden there: booleans read from PostgreSQL as `t`/`f`, and
-`rml:datatypeMap` by reference ignored.
+PostgreSQL and RMLMapper on PostgreSQL, against the triples written. One defect of RMLMapper 8.1.0
+is explained rather than hidden there: booleans read from PostgreSQL as `t`/`f`.
 
 [`bench/`](bench) is the measurement behind "Leveraging Parquet for representing RDF data": size,
 write time and access of GraphAr against N-Triples, HDT and an S/P/O Parquet table, written to

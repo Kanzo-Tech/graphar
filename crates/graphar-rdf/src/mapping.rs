@@ -4,9 +4,7 @@
 //! with RML-IO for the logical sources. One triples map per vertex type, over its table
 //! (`rml:SQL2008Table`); one per edge type, over a query that joins the adjacency list to the two
 //! end tables on the internal ids and reads the two subjects; one per set or language-tagged
-//! column, over a query that unnests it so each row is one value; and eight over the residual
-//! table, one per kind of subject (IRI, blank node) and object (IRI, blank node, literal with a
-//! datatype, literal with a language tag), each filtered to its rows.
+//! column, over a query that unnests it so each row is one value.
 //!
 //! **Every identifier is delimited, and every query is SQL:2008.** A table is `rml:iterator
 //! "\"Person\""`, R2RML's delimited table name, so `Person` is not folded to `person` and `Order`
@@ -16,8 +14,7 @@
 //! identifiers fold case, accepted all three. `unnest` stays: it is SQL's feature S091.
 //!
 //! **No term map reads an internal id, a row position or a generated blank node.** The ids appear
-//! only in the edge queries' joins, so the triples do not depend on the layout. A blank node of
-//! the residual table is the label it was given, read by reference.
+//! only in the edge queries' joins, so the triples do not depend on the layout.
 //!
 //! **`rml:source` is an anonymous `rml:Source`.** The logical sources are table names a host binds
 //! to the chunks when it opens the graph; a source that named a file would claim what the host
@@ -25,7 +22,7 @@
 
 use std::fmt::Write as _;
 
-use crate::schema::{Cardinality, Error, Object, RESIDUAL, Schema, Storage, plain};
+use crate::schema::{Cardinality, Error, Object, Schema, Storage, plain};
 use crate::{RDF_LANG_STRING, SUBJECT, XSD, XSD_STRING};
 
 const PREFIXES: &str =
@@ -112,7 +109,6 @@ pub fn mapping(schema: &Schema) -> Result<String, Error> {
             )],
         );
     }
-    residual(&mut out);
     if !schema.annotations.is_empty() {
         out.push('\n');
         for t in &schema.annotations {
@@ -120,69 +116,6 @@ pub fn mapping(schema: &Schema) -> Result<String, Error> {
         }
     }
     Ok(out)
-}
-
-/// The eight triples maps of the residual table.
-fn residual(out: &mut String) {
-    let table = quoted(RESIDUAL);
-    let blank = |column: &str| format!("SUBSTRING(\"{column}\" FROM 1 FOR 2) = '_:'");
-    let label = |column: &str| format!("SUBSTRING(\"{column}\" FROM 3) AS \"{column}\"");
-    let subjects = [
-        (
-            "iri",
-            format!("\"{SUBJECT}\""),
-            format!("NOT {}", blank(SUBJECT)),
-            "rml:IRI",
-        ),
-        ("blank", label(SUBJECT), blank(SUBJECT), "rml:BlankNode"),
-    ];
-    let objects = [
-        (
-            "iri",
-            "\"object\"".to_owned(),
-            format!("\"datatype\" IS NULL AND NOT {}", blank("object")),
-            "[ rml:reference \"object\" ; rml:termType rml:IRI ]".to_owned(),
-        ),
-        (
-            "blank",
-            label("object"),
-            format!("\"datatype\" IS NULL AND {}", blank("object")),
-            "[ rml:reference \"object\" ; rml:termType rml:BlankNode ]".to_owned(),
-        ),
-        (
-            "typed",
-            "\"object\", \"datatype\"".to_owned(),
-            "\"datatype\" IS NOT NULL AND \"lang\" IS NULL".to_owned(),
-            "[ rml:reference \"object\" ; rml:termType rml:Literal ; \
-             rml:datatypeMap [ rml:reference \"datatype\" ] ]"
-                .to_owned(),
-        ),
-        (
-            "tagged",
-            "\"object\", \"lang\"".to_owned(),
-            "\"lang\" IS NOT NULL".to_owned(),
-            "[ rml:reference \"object\" ; rml:termType rml:Literal ; \
-             rml:languageMap [ rml:reference \"lang\" ] ]"
-                .to_owned(),
-        ),
-    ];
-    for (s_kind, s_select, s_filter, s_term) in &subjects {
-        for (o_kind, o_select, o_filter, o_map) in &objects {
-            let query = format!(
-                "SELECT {s_select}, \"predicate\", {o_select} FROM {table} \
-                 WHERE {s_filter} AND {o_filter}"
-            );
-            triples_map(
-                out,
-                &format!("{RESIDUAL}_{s_kind}_{o_kind}"),
-                &query_source(&query),
-                &format!("[ rml:reference \"{SUBJECT}\" ; rml:termType {s_term} ]"),
-                &[format!(
-                    "[ rml:predicateMap [ rml:reference \"predicate\" ; rml:termType rml:IRI ] ;\n      rml:objectMap {o_map} ]"
-                )],
-            );
-        }
-    }
 }
 
 fn triples_map(out: &mut String, id: &str, source: &str, subject: &str, poms: &[String]) {

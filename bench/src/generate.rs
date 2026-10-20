@@ -1,20 +1,17 @@
 //! The synthetic dataset: universities in the shape of LUBM's (Guo, Pan and Heflin, 2005), with
-//! the typed literals LUBM lacks (integers, dates, language-tagged labels) and triples no shape
-//! describes, generated deterministically from a scale.
+//! the typed literals LUBM lacks (integers, dates, language-tagged labels), generated
+//! deterministically from a scale.
 //!
 //! A scale is a number of universities; each has 15 departments, and each department 10
-//! professors, 80 students, 20 courses and 30 publications. About 4 % of the triples are outside
-//! the shapes: `owl:sameAs` links, `rdfs:comment`s, a few non-canonical literals and untyped
-//! resources, so the residual table is never empty.
+//! professors, 80 students, 20 courses and 30 publications. The graph conforms to [`SHAPES`] read
+//! closed, which is the only graph graphar-rdf writes.
 
-use oxrdf::{BlankNode, Literal, NamedNode, Triple};
+use oxrdf::{Literal, NamedNode, Triple};
 
 const EX: &str = "http://lubm.example.org/";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
-const RDFS_COMMENT: &str = "http://www.w3.org/2000/01/rdf-schema#comment";
-const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
 
 /// The SHACL shapes of the dataset.
 pub const SHAPES: &str = r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
@@ -75,9 +72,6 @@ impl Rng {
     fn below(&mut self, n: u64) -> u64 {
         self.next() % n
     }
-    fn chance(&mut self, per_mille: u64) -> bool {
-        self.below(1000) < per_mille
-    }
 }
 
 struct Out(Vec<Triple>);
@@ -111,7 +105,7 @@ pub fn generate(universities: u32) -> Vec<Triple> {
     let mut rng = Rng(0x5eed_0f9a_aba5);
     let mut out = Out(Vec::new());
     let ex = |local: &str| format!("{EX}{local}");
-    let (ty, label, comment, same) = (RDF_TYPE, RDFS_LABEL, RDFS_COMMENT, OWL_SAME_AS);
+    let (ty, label) = (RDF_TYPE, RDFS_LABEL);
     for u in 0..universities {
         let uni = format!("{EX}University{u}");
         out.iri(&uni, ty, &ex("University"));
@@ -124,11 +118,6 @@ pub fn generate(universities: u32) -> Vec<Triple> {
             &uni,
             &ex("founded"),
             typed(1500 + rng.below(500), "integer"),
-        );
-        out.iri(
-            &uni,
-            same,
-            &format!("http://dbpedia.example.org/resource/University_{u}"),
         );
         for d in 0..15 {
             let dept = format!("{uni}/Department{d}");
@@ -188,13 +177,6 @@ pub fn generate(universities: u32) -> Vec<Triple> {
                 for _ in 0..2 {
                     out.iri(prof, &ex("teacherOf"), &courses[rng.below(20) as usize]);
                 }
-                if rng.chance(300) {
-                    out.lit(
-                        prof,
-                        comment,
-                        Literal::new_simple_literal("Visiting scholar"),
-                    );
-                }
             }
             for s in 0..80 {
                 let student = format!("{dept}/Student{s}");
@@ -209,14 +191,7 @@ pub fn generate(universities: u32) -> Vec<Triple> {
                     &ex("emailAddress"),
                     Literal::new_simple_literal(format!("s{s}.d{d}@u{u}.example.org")),
                 );
-                // A non-canonical integer now and then: a triple no column gives back exactly.
-                let age = 18 + rng.below(12);
-                let age = if rng.chance(5) {
-                    typed(format!("0{age}"), "integer")
-                } else {
-                    typed(age, "integer")
-                };
-                out.lit(&student, &ex("age"), age);
+                out.lit(&student, &ex("age"), typed(18 + rng.below(12), "integer"));
                 out.lit(&student, &ex("enrolled"), date(&mut rng, 2010, 15));
                 out.iri(&student, &ex("memberOf"), &dept);
                 out.iri(&student, &ex("advisor"), &profs[rng.below(10) as usize]);
@@ -226,17 +201,6 @@ pub fn generate(universities: u32) -> Vec<Triple> {
                         &ex("takesCourse"),
                         &courses[rng.below(20) as usize],
                     );
-                }
-                if rng.chance(50) {
-                    // A blank node: an address no shape describes.
-                    let b = BlankNode::new_unchecked(format!("a{u}x{d}x{s}"));
-                    out.0
-                        .push(Triple::new(n(&student), n(&ex("address")), b.clone()));
-                    out.0.push(Triple::new(
-                        b,
-                        n(&ex("city")),
-                        Literal::new_simple_literal("Oviedo"),
-                    ));
                 }
             }
             for p in 0..30 {
@@ -257,13 +221,6 @@ pub fn generate(universities: u32) -> Vec<Triple> {
                         &publication,
                         &ex("publicationAuthor"),
                         &profs[rng.below(10) as usize],
-                    );
-                }
-                if rng.chance(200) {
-                    out.iri(
-                        &publication,
-                        same,
-                        &format!("https://doi.example.org/10.{u}/{d}.{p}"),
                     );
                 }
             }

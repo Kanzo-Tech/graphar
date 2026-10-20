@@ -1,6 +1,6 @@
 //! Triples and a schema to a GraphAr graph.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_array::builder::ArrayBuilder;
@@ -20,9 +20,7 @@ use parquet::basic::Encoding;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 
-use crate::schema::{
-    Cardinality, Column, Error, Object, RESIDUAL_COLUMNS, Schema, Storage, user_types,
-};
+use crate::schema::{Cardinality, Column, Error, Object, Schema, Storage, user_types};
 use crate::term::{Value, parse};
 use crate::{MAPPING_FILE, RDF_LANG_STRING, RDF_TYPE, SUBJECT, mapping};
 
@@ -60,8 +58,6 @@ pub struct Written {
     pub vertices: Vec<(String, u64)>,
     /// The edges of each edge type, in the schema's order.
     pub edges: Vec<(String, u64)>,
-    /// The triples in the residual table.
-    pub residual: u64,
     /// The distinct triples written.
     pub triples: u64,
 }
@@ -70,18 +66,24 @@ pub struct Written {
 type Place = (usize, usize);
 
 /// **Writes `triples` as the GraphAr graph `schema` reads**, under `root`: every vertex table,
-/// every edge table, the residual table, a Puffin file per vertex type of several chunks,
-/// `mapping.ttl`, and the
+/// every edge table, a Puffin file per vertex type of several chunks, `mapping.ttl`, and the
 /// information files last, so a reader that finds the graph document finds everything it names.
 ///
-/// A subject is a row of the first vertex type whose class it is an instance of, by an
-/// `rdf:type` triple; a blank node is a row of none. Of its triples, the one that types it goes
-/// into the row, as does each value of a column whose lexical form the column gives back, one
-/// per subject for a single-valued column, and each object that is a row of an edge type's
-/// destination. Everything else, a duplicate excepted, is a row of the residual table.
+/// Only a graph that conforms to the closed reading of the schema is written, and every triple of
+/// it has one place:
+///
+/// - every subject is an IRI with exactly one `rdf:type` triple, whose object is the class of one
+///   vertex type, and the subject is a row of that type;
+/// - every other triple of it is a value of a column of that type (an IRI, a tagged string, or a
+///   literal of the column's datatype that is a value the column holds) or an edge of an edge type
+///   from it, whose object is a row of the destination;
+/// - a single-valued column has at most one value per subject.
+///
+/// A literal is stored as its value, and reads back in its canonical lexical form.
 ///
 /// # Errors
-/// What [`Schema::check`] refuses, and what the store or the writers refuse.
+/// [`Error::Unplaced`] for the first triple, in subject order, with no place, before anything is
+/// written; what [`Schema::check`] refuses; what the store or the writers refuse.
 pub async fn write(
     store: &dyn ObjectStore,
     root: &Path,
@@ -94,43 +96,47 @@ pub async fn write(
 
     let distinct: HashSet<Triple> = triples.into_iter().collect();
     let count = distinct.len() as u64;
-    let mut by_subject: HashMap<NamedOrBlankNode, Vec<Triple>> = HashMap::new();
+    let mut by_subject: BTreeMap<String, Vec<Triple>> = BTreeMap::new();
     for t in distinct {
-        by_subject.entry(t.subject.clone()).or_default().push(t);
+        let key = match &t.subject {
+            NamedOrBlankNode::NamedNode(s) => s.as_str().to_owned(),
+            NamedOrBlankNode::BlankNode(_) => {
+                return Err(unplaced(&t, "its subject is a blank node"));
+            }
+        };
+        by_subject.entry(key).or_default().push(t);
+    }
+    for ts in by_subject.values_mut() {
+        ts.sort_by_cached_key(ToString::to_string);
     }
 
-    // Each typed subject's place, the rows of a type sorted by IRI.
+    // Each subject's place, the rows of a type sorted by IRI (`by_subject` is).
     let class_of: HashMap<&str, usize> = schema
         .vertices
         .iter()
         .enumerate()
         .filter_map(|(i, v)| Some((v.class.as_deref()?, i)))
         .collect();
-    let mut rows: Vec<BTreeSet<String>> = vec![BTreeSet::new(); schema.vertices.len()];
+    let mut rows: Vec<Vec<String>> = vec![Vec::new(); schema.vertices.len()];
+    let mut place: HashMap<&str, Place> = HashMap::new();
     for (subject, ts) in &by_subject {
-        let NamedOrBlankNode::NamedNode(s) = subject else {
-            continue;
+        let mut types = ts.iter().filter(|t| t.predicate.as_str() == RDF_TYPE);
+        let Some(typing) = types.next() else {
+            return Err(unplaced(&ts[0], "its subject has no rdf:type"));
         };
-        let typed = ts
-            .iter()
-            .filter(|t| t.predicate.as_str() == RDF_TYPE)
-            .filter_map(|t| match &t.object {
-                Term::NamedNode(c) => class_of.get(c.as_str()).copied(),
-                _ => None,
-            })
-            .min();
-        if let Some(v) = typed {
-            rows[v].insert(s.as_str().to_owned());
+        if let Some(second) = types.next() {
+            return Err(unplaced(second, "its subject has a second rdf:type"));
         }
+        let v = match &typing.object {
+            Term::NamedNode(c) => class_of.get(c.as_str()).copied(),
+            _ => None,
+        }
+        .ok_or_else(|| unplaced(typing, "no shape targets this class"))?;
+        place.insert(subject, (v, rows[v].len()));
+        rows[v].push(subject.clone());
     }
-    let rows: Vec<Vec<String>> = rows.into_iter().map(|r| r.into_iter().collect()).collect();
-    let place: HashMap<&str, Place> = rows
-        .iter()
-        .enumerate()
-        .flat_map(|(v, r)| r.iter().enumerate().map(move |(i, s)| (s.as_str(), (v, i))))
-        .collect();
 
-    // Each column's values, row by row; each edge type's pairs; the rest.
+    // Each column's values, row by row; each edge type's pairs.
     let mut cells: Vec<Vec<Vec<Vec<Value>>>> = schema
         .vertices
         .iter()
@@ -138,78 +144,71 @@ pub async fn write(
         .map(|(v, r)| vec![vec![Vec::new(); r.len()]; v.columns.len()])
         .collect();
     let mut pairs: Vec<Vec<(i64, i64)>> = vec![Vec::new(); schema.edges.len()];
-    let mut residual: Vec<[Option<String>; 5]> = Vec::new();
-    for (subject, ts) in by_subject {
-        let here = match &subject {
-            NamedOrBlankNode::NamedNode(s) => place.get(s.as_str()).copied(),
-            NamedOrBlankNode::BlankNode(_) => None,
-        };
-        let Some((v, row)) = here else {
-            residual.extend(ts.iter().map(row_of));
-            continue;
-        };
-        let vertex = &schema.vertices[v];
-        let class = vertex.class.as_deref();
-        // By predicate, the triples of this subject not yet placed.
-        let mut rest: Vec<Option<Triple>> = ts.into_iter().map(Some).collect();
-        for slot in &mut rest {
-            let typing = slot.as_ref().is_some_and(|t| {
-                t.predicate.as_str() == RDF_TYPE
-                    && matches!(&t.object, Term::NamedNode(c) if Some(c.as_str()) == class)
-            });
-            if typing {
-                *slot = None;
-            }
-        }
-        for (c, column) in vertex.columns.iter().enumerate() {
-            let fits: Vec<(usize, Value)> = rest
-                .iter()
-                .enumerate()
-                .filter_map(|(i, t)| {
-                    let t = t.as_ref()?;
-                    (t.predicate.as_str() == column.predicate)
-                        .then(|| value(column, &t.object))
-                        .flatten()
-                        .map(|value| (i, value))
-                })
-                .collect();
-            if column.cardinality == Cardinality::Single && fits.len() != 1 {
-                continue;
-            }
-            let mut values = Vec::with_capacity(fits.len());
-            for (i, value) in fits {
-                rest[i] = None;
-                values.push(value);
-            }
-            values.sort_by_key(crate::term::lexical_of);
-            cells[v][c][row] = values;
-        }
-        for (e, edge) in schema.edges.iter().enumerate() {
-            if edge.source != vertex.label {
-                continue;
-            }
-            let destination = schema
+    let destination: Vec<usize> = schema
+        .edges
+        .iter()
+        .map(|e| {
+            schema
                 .vertices
                 .iter()
-                .position(|d| d.label == edge.destination)
-                .expect("checked");
-            for slot in &mut rest {
-                let Some(t) = slot.as_ref() else { continue };
-                if t.predicate.as_str() != edge.predicate {
-                    continue;
-                }
-                let Term::NamedNode(o) = &t.object else {
-                    continue;
-                };
-                if let Some(&(d, target)) = place.get(o.as_str())
-                    && d == destination
-                {
-                    pairs[e].push((row as i64, target as i64));
-                    *slot = None;
-                }
+                .position(|d| d.label == e.destination)
+                .expect("checked")
+        })
+        .collect();
+    for (subject, ts) in &by_subject {
+        let (v, row) = place[subject.as_str()];
+        let vertex = &schema.vertices[v];
+        for t in ts {
+            let p = t.predicate.as_str();
+            if p == RDF_TYPE {
+                continue;
             }
+            if let Some(c) = vertex.columns.iter().position(|c| c.predicate == p) {
+                let column = &vertex.columns[c];
+                let value = value(column, &t.object).ok_or_else(|| {
+                    unplaced(
+                        t,
+                        &format!("not a value of {}.{}", vertex.label, column.name),
+                    )
+                })?;
+                let cell = &mut cells[v][c][row];
+                if !cell.contains(&value) {
+                    if column.cardinality == Cardinality::Single && !cell.is_empty() {
+                        return Err(unplaced(
+                            t,
+                            &format!("{}.{} has at most one value", vertex.label, column.name),
+                        ));
+                    }
+                    cell.push(value);
+                }
+                continue;
+            }
+            let edge = schema
+                .edges
+                .iter()
+                .position(|e| e.source == vertex.label && e.predicate == p)
+                .ok_or_else(|| {
+                    unplaced(t, &format!("{} has no column or edge of it", vertex.label))
+                })?;
+            let target = match &t.object {
+                Term::NamedNode(o) => place.get(o.as_str()).copied(),
+                _ => None,
+            }
+            .filter(|&(d, _)| d == destination[edge])
+            .ok_or_else(|| {
+                unplaced(
+                    t,
+                    &format!(
+                        "its object is not a row of {}",
+                        schema.edges[edge].destination
+                    ),
+                )
+            })?;
+            pairs[edge].push((row as i64, target.1 as i64));
         }
-        residual.extend(rest.iter().flatten().map(row_of));
+    }
+    for column in cells.iter_mut().flatten().flatten() {
+        column.sort_by_key(crate::term::lexical_of);
     }
 
     let writer = Writer {
@@ -227,20 +226,6 @@ pub async fn write(
         let n = write_table(store, root, &info.vertices[v], &batch, &writer, options).await?;
         vertices.push((vertex.label.clone(), n));
     }
-    residual.sort();
-    let batch =
-        RecordBatch::try_from_iter(RESIDUAL_COLUMNS.iter().enumerate().map(|(i, (n, _))| {
-            let column: ArrayRef = Arc::new(
-                residual
-                    .iter()
-                    .map(|r| r[i].as_deref())
-                    .collect::<arrow_array::StringArray>(),
-            );
-            ((*n).to_owned(), column)
-        }))?;
-    let residual_info = &info.vertices[schema.vertices.len()];
-    let residual = write_table(store, root, residual_info, &batch, &writer, options).await?;
-
     let mut edges = Vec::new();
     for (e, edge) in schema.edges.iter().enumerate() {
         let mut ps = std::mem::take(&mut pairs[e]);
@@ -272,7 +257,6 @@ pub async fn write(
         info,
         vertices,
         edges,
-        residual,
         triples: count,
     })
 }
@@ -351,28 +335,11 @@ fn value(column: &Column, object: &Term) -> Option<Value> {
     }
 }
 
-/// The residual row of a triple.
-fn row_of(t: &Triple) -> [Option<String>; 5] {
-    let node = |n: &NamedOrBlankNode| match n {
-        NamedOrBlankNode::NamedNode(n) => n.as_str().to_owned(),
-        NamedOrBlankNode::BlankNode(b) => format!("_:{}", b.as_str()),
-    };
-    let (object, datatype, lang) = match &t.object {
-        Term::NamedNode(n) => (n.as_str().to_owned(), None, None),
-        Term::BlankNode(b) => (format!("_:{}", b.as_str()), None, None),
-        Term::Literal(l) => (
-            l.value().to_owned(),
-            Some(l.datatype().as_str().to_owned()),
-            l.language().map(str::to_owned),
-        ),
-    };
-    [
-        Some(node(&t.subject)),
-        Some(t.predicate.as_str().to_owned()),
-        Some(object),
-        datatype,
-        lang,
-    ]
+fn unplaced(t: &Triple, reason: &str) -> Error {
+    Error::Unplaced {
+        triple: format!("{t} ."),
+        reason: reason.to_owned(),
+    }
 }
 
 fn strings(values: &[String]) -> ArrayRef {

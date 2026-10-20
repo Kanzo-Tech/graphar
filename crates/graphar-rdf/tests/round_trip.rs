@@ -1,13 +1,15 @@
 //! Statement R: the triples [`graphar_rdf::read`] reads from a written graph are the triples
-//! [`graphar_rdf::write`] was given, whatever the shapes type.
+//! [`graphar_rdf::write`] was given, up to canonical lexical form; and a graph that does not
+//! conform is refused, with nothing written.
 
 use std::collections::BTreeSet;
 
 use futures::executor::block_on;
-use graphar_rdf::{Cardinality, Object, Options, Schema, read, shapes, write};
+use graphar_rdf::{Cardinality, Error, Object, Options, Schema, read, shapes, write};
+use object_store::ObjectStore;
 use object_store::{memory::InMemory, path::Path};
 use oxrdf::Triple;
-use oxttl::TurtleParser;
+use oxttl::{NTriplesParser, TurtleParser};
 
 fn data(name: &str) -> String {
     std::fs::read_to_string(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR")))
@@ -27,6 +29,19 @@ fn people() -> Vec<Triple> {
 
 fn set(triples: impl IntoIterator<Item = Triple>) -> BTreeSet<String> {
     triples.into_iter().map(|t| t.to_string()).collect()
+}
+
+/// `people.ttl` as it reads back: bob's age and `active` in their canonical forms.
+fn canonical() -> BTreeSet<String> {
+    set(people())
+        .into_iter()
+        .map(|t| {
+            t.replace(r#""031"^^"#, r#""31"^^"#).replace(
+                r#""0"^^<http://www.w3.org/2001/XMLSchema#boolean>"#,
+                r#""false"^^<http://www.w3.org/2001/XMLSchema#boolean>"#,
+            )
+        })
+        .collect()
 }
 
 fn round_trip(schema: &Schema, chunk_size: u64) -> (graphar_rdf::Written, BTreeSet<String>) {
@@ -77,7 +92,8 @@ fn shacl_and_shex_make_one_schema() {
 #[test]
 fn every_triple_comes_back_at_every_chunk_size() {
     let schema = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
-    let given = set(people());
+    let given = canonical();
+    assert_ne!(given, set(people()), "the data has non-canonical forms");
     for chunk_size in [1, 2, 3, 1 << 20] {
         let (written, back) = round_trip(&schema, chunk_size);
         let missing: Vec<_> = given.difference(&back).collect();
@@ -91,8 +107,8 @@ fn every_triple_comes_back_at_every_chunk_size() {
             written.vertices,
             [("Person".to_owned(), 4), ("Organization".to_owned(), 1)]
         );
-        // alice→bob, alice→carol, bob→alice; alice→nobody (no row) and carol→_:b stay triples.
-        assert_eq!(written.edges[0], ("Person_knows_Person".to_owned(), 3));
+        // alice→bob, alice→carol, bob→alice, carol→dave.
+        assert_eq!(written.edges[0], ("Person_knows_Person".to_owned(), 4));
         assert_eq!(
             written.edges[1],
             ("Person_worksFor_Organization".to_owned(), 2)
@@ -101,18 +117,78 @@ fn every_triple_comes_back_at_every_chunk_size() {
 }
 
 #[test]
-fn what_no_column_holds_exactly_stays_a_triple() {
+fn a_graph_that_does_not_conform_is_refused_and_nothing_written() {
     let schema = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
-    let (written, _) = round_trip(&schema, 2);
-    // bob: ex:Employee, "031", the impossible date, the shoe size; carol: two foaf:names, the
-    // blank friend and what it says; alice: ex:nobody; _:x's two triples; ex:notyped's one; and
-    // acme's founding year, an `xsd:integer` where the shape says `xsd:int`.
-    assert_eq!(written.residual, 4 + 2 + 2 + 1 + 2 + 1 + 1);
-}
-
-#[test]
-fn with_no_shapes_every_triple_is_in_the_residual_table() {
-    let (written, back) = round_trip(&Schema::default(), 4);
-    assert_eq!(back, set(people()));
-    assert_eq!(written.residual, written.triples);
+    let ex = "https://example.org/";
+    let foaf = "http://xmlns.com/foaf/0.1/name";
+    let xsd = "http://www.w3.org/2001/XMLSchema#";
+    let rdf_type = graphar_rdf::RDF_TYPE;
+    for (extra, reason) in [
+        (
+            format!("<{ex}bob> <{rdf_type}> <{ex}Employee>"),
+            "its subject has a second rdf:type",
+        ),
+        (
+            format!("<{ex}x> <{rdf_type}> <{ex}Thing>"),
+            "no shape targets this class",
+        ),
+        (
+            format!("<{ex}notyped> <{foaf}> \"Nobody\""),
+            "its subject has no rdf:type",
+        ),
+        (
+            format!("_:x <{foaf}> \"Anonymous\""),
+            "its subject is a blank node",
+        ),
+        (
+            format!("<{ex}carol> <{foaf}> \"Caroline\""),
+            "Person.name has at most one value",
+        ),
+        (
+            format!("<{ex}alice> <{ex}knows> <{ex}nobody>"),
+            "its object is not a row of Person",
+        ),
+        (
+            format!("<{ex}alice> <{ex}knows> _:b"),
+            "its object is not a row of Person",
+        ),
+        (
+            format!("<{ex}bob> <{ex}shoeSize> \"42.5\"^^<{xsd}decimal>"),
+            "Person has no column or edge of it",
+        ),
+        (
+            format!("<{ex}dave> <{ex}born> \"1985-13-01\"^^<{xsd}date>"),
+            "not a value of Person.born",
+        ),
+        (
+            format!("<{ex}acme> <{ex}founded> \"1999\"^^<{xsd}integer>"),
+            "not a value of Organization.founded",
+        ),
+    ] {
+        let line = format!("{extra} .\n");
+        let t: Triple = NTriplesParser::new()
+            .for_slice(line.as_bytes())
+            .next()
+            .expect("a triple")
+            .expect("N-Triples");
+        let store = InMemory::new();
+        let triples = people().into_iter().chain([t]);
+        let err = block_on(write(
+            &store,
+            &Path::from("g"),
+            &schema,
+            triples,
+            &Options::default(),
+        ))
+        .expect_err(&extra);
+        let Error::Unplaced { reason: why, .. } = &err else {
+            panic!("{extra}: {err}");
+        };
+        assert_eq!(why, reason, "{extra}");
+        let written: Vec<_> = block_on(futures::TryStreamExt::try_collect::<Vec<_>>(
+            store.list(None),
+        ))
+        .expect("a listing");
+        assert!(written.is_empty(), "{extra}: wrote {written:?}");
+    }
 }

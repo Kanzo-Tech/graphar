@@ -8,21 +8,21 @@ ex:alice a ex:Person ;
   ex:age 30 ; ex:born "1990-05-01"^^xsd:date ; ex:active true ;
   ex:nick "Al"@en, "Ali"@es ; ex:motto "Curiouser"@en ;
   ex:homepage <https://alice.example> ;
-  ex:knows ex:bob, ex:carol, ex:nobody ;
+  ex:knows ex:bob, ex:carol ;
   ex:worksFor ex:acme ;
   ex:tag "a", "b" .
 
-ex:bob a ex:Person, ex:Employee ;
+ex:bob a ex:Person ;
   foaf:name "Bob" ;
   ex:age "031"^^xsd:integer ;
-  ex:born "1985-13-01"^^xsd:date ;
-  ex:knows ex:alice ;
-  ex:shoeSize 42.5 .
+  ex:born "1985-11-01"^^xsd:date ;
+  ex:active "0"^^xsd:boolean ;
+  ex:knows ex:alice .
 
 ex:carol a ex:Person ;
-  foaf:name "Carol", "Caroline" ;
+  foaf:name "Carol" ;
   ex:age 25 ;
-  ex:knows [ foaf:name "Someone" ] ;
+  ex:knows ex:dave ;
   ex:worksFor ex:acme .
 
 ex:dave a ex:Person ;
@@ -30,7 +30,4 @@ ex:dave a ex:Person ;
 
 ex:acme a ex:Organization ;
   schema:name "ACME"@en ;
-  ex:founded 1999 .
-
-_:x foaf:name "Anonymous" ; a ex:Person .
-ex:notyped foaf:name "Nobody" .
+  ex:founded "1999"^^xsd:int .

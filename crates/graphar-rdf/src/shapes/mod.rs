@@ -11,9 +11,10 @@
 //!   literals of one datatype (`sh:datatype`).
 //!
 //! It is single-valued when its maximum is 1 and a set otherwise. Anything else a shape says
-//! (`sh:or`, inverse and sequence paths, value ranges, patterns) types nothing, and the triples it
-//! describes are kept in the residual table. A shape constrains a graph; here it only decides
-//! which triples have a column, so ignoring a constraint loses no triple.
+//! (`sh:or`, inverse and sequence paths, value ranges, patterns) types nothing: a shape here only
+//! decides where a triple goes, and [`crate::write()`] refuses a graph with a triple that has no
+//! place, which is the closed reading (`sh:closed`, ShEx `CLOSED`) of these shapes. A shape that
+//! names no class targets nothing `write` reads.
 //!
 //! **Names.** A type is named by its class's local name and a column or an edge type by its
 //! predicate's, made a plain identifier; a name already taken gets `_2`, `_3`, … in document
@@ -26,7 +27,7 @@ pub mod shex;
 use std::collections::HashSet;
 
 use crate::SUBJECT;
-use crate::schema::{Cardinality, Column, EdgeType, Object, RESIDUAL, Schema, VertexType};
+use crate::schema::{Cardinality, Column, EdgeType, Object, Schema, VertexType};
 
 /// What a property of a shape points at, before the shapes are matched to types.
 #[derive(Clone, Debug)]
@@ -55,7 +56,7 @@ pub(crate) fn schema(shapes: &[Shape]) -> Schema {
         .into_iter()
         .filter(|s| seen_classes.insert(s.class.clone()))
         .collect();
-    let mut labels = Names::new(&[RESIDUAL]);
+    let mut labels = Names::new(&[]);
     let label_of: Vec<String> = typed
         .iter()
         .map(|s| labels.take(local(s.class.as_deref().expect("typed"))))

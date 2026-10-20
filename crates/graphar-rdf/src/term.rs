@@ -1,10 +1,10 @@
-//! How a literal is stored: the column type of each datatype, and whether a lexical form is the
-//! one the column gives back.
+//! How a literal is stored: the column type of each datatype, the value a lexical form is, and
+//! the canonical lexical form a stored value gives back.
 
 use crate::XSD;
 use crate::schema::Storage;
 
-/// The column type that holds literals of `datatype` and gives each lexical form back.
+/// The column type that holds literals of `datatype`.
 ///
 /// Typed are the datatypes whose canonical lexical form a column's natural text is, in every SQL
 /// engine an RML processor reads through and in [`crate::read()`]: `xsd:integer` and `xsd:long`
@@ -21,7 +21,7 @@ pub(crate) fn storage_of(datatype: &str) -> Storage {
     }
 }
 
-/// A typed value parsed from a lexical form that is canonical for its column.
+/// A typed value parsed from a lexical form.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Value {
     Text(String),
@@ -32,21 +32,24 @@ pub(crate) enum Value {
     Date(i32),
 }
 
-/// `lexical` as a value of `storage`, if it is the text that value gives back.
+/// The value of `lexical` in a column of `storage`, if it is a lexical form of a value the column
+/// holds. A form that is not canonical (`+1`, `01`, `1` for `true`) is its value, and reads back
+/// in the canonical form: RDF 1.1 Concepts §3.3 makes the two literals denote one value, and the
+/// round trip is equality up to canonical lexical form. A date with a time zone, or outside years
+/// 0001 to 9999, and an integer out of the column's range are values no column here holds.
 pub(crate) fn parse(storage: Storage, lexical: &str) -> Option<Value> {
-    let value = match storage {
-        Storage::String | Storage::LangString => return Some(Value::Text(lexical.to_owned())),
+    // Rust's integer parse takes XML Schema's `[+-]?[0-9]+` and nothing else.
+    Some(match storage {
+        Storage::String | Storage::LangString => Value::Text(lexical.to_owned()),
         Storage::Int64 => Value::Int64(lexical.parse().ok()?),
         Storage::Int32 => Value::Int32(lexical.parse().ok()?),
         Storage::Bool => match lexical {
-            "true" => Value::Bool(true),
-            "false" => Value::Bool(false),
+            "true" | "1" => Value::Bool(true),
+            "false" | "0" => Value::Bool(false),
             _ => return None,
         },
         Storage::Date => Value::Date(date(lexical)?),
-    };
-    // `+1`, `01` and `-0` parse, and are not what the column gives back.
-    (lexical_of(&value) == lexical).then_some(value)
+    })
 }
 
 /// The lexical form of a stored value.
@@ -123,15 +126,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_canonical_form_is_typed() {
+    fn a_lexical_form_is_its_value_and_reads_back_canonical() {
         assert_eq!(parse(Storage::Int64, "42"), Some(Value::Int64(42)));
-        assert_eq!(parse(Storage::Int64, "-7"), Some(Value::Int64(-7)));
-        for not in ["+1", "01", "-0", "1.0", " 1", "99999999999999999999"] {
+        for (form, canonical) in [("+1", "1"), ("01", "1"), ("-0", "0"), ("066472", "66472")] {
+            let value = parse(Storage::Int64, form).expect(form);
+            assert_eq!(lexical_of(&value), canonical, "{form}");
+        }
+        for not in ["1.0", " 1", "", "99999999999999999999"] {
             assert_eq!(parse(Storage::Int64, not), None, "{not}");
         }
         assert_eq!(parse(Storage::Int32, "3000000000"), None);
-        assert_eq!(parse(Storage::Bool, "1"), None);
-        assert_eq!(parse(Storage::Bool, "true"), Some(Value::Bool(true)));
+        assert_eq!(parse(Storage::Bool, "1"), Some(Value::Bool(true)));
+        assert_eq!(parse(Storage::Bool, "yes"), None);
         assert_eq!(parse(Storage::Date, "1970-01-01"), Some(Value::Date(0)));
         assert_eq!(
             parse(Storage::Date, "2024-02-29"),

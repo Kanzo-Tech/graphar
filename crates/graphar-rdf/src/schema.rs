@@ -12,9 +12,6 @@ use graphar_parquet::UserTypes;
 use crate::term::storage_of;
 use crate::{RDF_LANG_STRING, SUBJECT};
 
-/// The vertex type of the residual table: every triple no shape covers, one row each.
-pub const RESIDUAL: &str = "triples";
-
 /// The user-defined type of a language-tagged string: `gar/v1 (langString)`.
 pub(crate) const LANG_STRING: &str = "langString";
 
@@ -35,8 +32,8 @@ pub struct Schema {
 pub struct VertexType {
     /// The table's name, which is the GraphAr vertex type.
     pub label: String,
-    /// The class every row is an instance of. A type without one has no `rdf:type` triple, and
-    /// [`crate::write()`] puts no subject in it.
+    /// The class every row is an instance of, by the one `rdf:type` triple each subject has. A
+    /// type without one is targeted by nothing [`crate::write()`] reads, and holds no row.
     pub class: Option<String>,
     /// The columns beside `subject`, in table order.
     pub columns: Vec<Column>,
@@ -134,6 +131,15 @@ pub enum Error {
     /// The triples do not parse.
     #[error("the triples: {0}")]
     Syntax(String),
+    /// A triple the schema has no place for: the graph does not conform to the closed reading of
+    /// its shapes, and nothing was written.
+    #[error("{triple} does not conform: {reason}")]
+    Unplaced {
+        /// The triple, in N-Triples.
+        triple: String,
+        /// Why it has no place.
+        reason: String,
+    },
     /// Writing or reading the GraphAr files.
     #[error(transparent)]
     Parquet(#[from] graphar_parquet::Error),
@@ -197,17 +203,6 @@ pub fn user_types() -> UserTypes {
     UserTypes::from([(LANG_STRING.to_owned(), lang_string_type())])
 }
 
-/// The residual table's columns: a triple as text. A blank node is `_:` and its label, which no
-/// IRI can be; a literal has a datatype, `rdf:langString` with its tag in `lang`; an IRI or a
-/// blank node has none.
-pub(crate) const RESIDUAL_COLUMNS: [(&str, bool); 5] = [
-    (SUBJECT, false),
-    ("predicate", false),
-    ("object", false),
-    ("datatype", true),
-    ("lang", true),
-];
-
 impl Schema {
     /// Whether the schema can be read unambiguously (A2): two vertex types do not share a class,
     /// two columns of a type do not share a predicate, and no edge type's predicate is a column
@@ -229,7 +224,7 @@ impl Schema {
         let mut labels: HashMap<&str, ()> = HashMap::new();
         let mut classes: HashMap<&str, &str> = HashMap::new();
         for v in &self.vertices {
-            if v.label == RESIDUAL || !named(&v.label) || labels.insert(&v.label, ()).is_some() {
+            if !named(&v.label) || labels.insert(&v.label, ()).is_some() {
                 return Err(Error::Name(v.label.clone()));
             }
             if let Some(class) = &v.class {
@@ -285,7 +280,7 @@ impl Schema {
     }
 
     /// The information files of the graph [`crate::write()`] writes: a vertex type per
-    /// [`VertexType`] and the residual one, an edge type per [`EdgeType`], each stored as one
+    /// [`VertexType`], an edge type per [`EdgeType`], each stored as one
     /// property group, and adjacency lists ordered by source, every chunk `chunk_size` rows.
     #[must_use]
     pub fn graph_info(&self, name: &str, chunk_size: u64) -> GraphInfo {
@@ -325,7 +320,7 @@ impl Schema {
             }],
             version: version.clone(),
         };
-        let mut vertices: Vec<VertexInfo> = self
+        let vertices: Vec<VertexInfo> = self
             .vertices
             .iter()
             .map(|v| {
@@ -342,13 +337,6 @@ impl Schema {
                 vertex(&v.label, properties)
             })
             .collect();
-        vertices.push(vertex(
-            RESIDUAL,
-            RESIDUAL_COLUMNS
-                .iter()
-                .map(|&(n, nullable)| property(n, DataType::String, false, nullable, false))
-                .collect(),
-        ));
         let edges = self
             .edges
             .iter()

@@ -1,23 +1,22 @@
 //! Writes an RDF graph and its shapes as GraphAr to a directory:
 //!
 //! ```sh
-//! cargo run -p graphar-rdf --example write -- <shapes.ttl | shapes.shex.json | -> <data.ttl | data.nt> <dir> [chunk_size]
+//! cargo run -p graphar-rdf --example write -- <shapes.ttl | shapes.shex.json> <data.ttl | data.nt> <dir> [chunk_size]
 //! ```
 //!
-//! `-` for no shapes: every triple goes to the residual table.
+//! A graph that does not conform to the shapes is refused, naming the triple and why.
 
 use futures::executor::block_on;
-use graphar_rdf::{Options, Schema, shapes, write};
+use graphar_rdf::{Options, shapes, write};
 use object_store::{local::LocalFileSystem, path::Path};
 use oxttl::{NTriplesParser, TurtleParser};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [shapes_file, data, dir, rest @ ..] = args.as_slice() else {
-        return Err("usage: write <shapes|-> <data> <dir> [chunk_size]".into());
+        return Err("usage: write <shapes> <data> <dir> [chunk_size]".into());
     };
     let schema = match shapes_file.as_str() {
-        "-" => Schema::default(),
         f if f.ends_with(".json") => shapes::shex::from_json(&std::fs::read_to_string(f)?)?,
         f => shapes::shacl::from_turtle(&std::fs::read_to_string(f)?)?,
     };
@@ -43,8 +42,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let written = block_on(write(&store, &Path::from(""), &schema, triples, &options))?;
     println!(
-        "{} triples: {:?}, {:?}, {} residual",
-        written.triples, written.vertices, written.edges, written.residual
+        "{} triples: {:?}, {:?}",
+        written.triples, written.vertices, written.edges
     );
     Ok(())
 }

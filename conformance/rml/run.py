@@ -4,8 +4,8 @@
 
 Loads every vertex and edge table of the graph into DuckDB (and, with --pg, PostgreSQL), runs the
 graph's mapping.ttl through Morph-KGC on each and through RMLMapper on PostgreSQL, and compares each
-output with the expected triples as RDF graphs (blank nodes up to isomorphism, a simple literal as
-xsd:string). Prints one JSON object per processor and exits non-zero if any differs or fails.
+output with the expected triples as RDF graphs (a simple literal as xsd:string, and an integer or
+boolean literal in its canonical lexical form, which is how graphar-rdf stores and reads it back). Prints one JSON object per processor and exits non-zero if any differs or fails.
 
 The mapping is run **as written**, but for three defects of Morph-KGC 2.10 that no mapping can
 avoid, each a rewrite here (findings F6 to F8 of the run over fossil's programs, 2026-10-19):
@@ -14,12 +14,11 @@ formulation, giving zero triples and no error; F7, a source column named `subjec
 (or `predicate`, `object`, `graph`) is overwritten by its own working column of that name; F8, an SQL NULL becomes the literal "None" unless na_values says so.
 RMLMapper needs only what every processor needs, a database for the abstract rml:source (F4).
 
-Two defects of RMLMapper 8.1.0 are not rewritten but **explained**: a difference counts as one only
+One defect of RMLMapper 8.1.0 is not rewritten but **explained**: a difference counts as one only
 if every missing triple has its extra twin and the pair is that defect. F5: a boolean read from
-PostgreSQL is written "t"/"f" where R2RML's natural mapping says "true"/"false". F9: a datatype
-map by reference (RML-Core's rml:datatypeMap) is ignored, and the literal is xsd:string. A
-processor whose differences are all explained is reported `equal: false, explained: true`, and
-does not fail the run.
+PostgreSQL is written "t"/"f" where R2RML's natural mapping says "true"/"false". A processor whose
+differences are all explained is reported `equal: false, explained: true`, and does not fail the
+run.
 
 Needs: duckdb, rdflib, morph-kgc==2.10.0, duckdb-engine, psycopg2-binary; Java and the RMLMapper
 jar for RMLMapper.
@@ -45,10 +44,12 @@ BASE = "http://graphar-rdf.invalid/mapping.ttl"
 # Morph-KGC's working columns (F7).
 CLASH = ("subject", "predicate", "object", "graph")
 
-# A literal is compared as written: "031"^^xsd:integer is not "31"^^xsd:integer.
+# A literal is compared as written, but for the canonical forms `canon` gives the typed ones.
 rdflib.NORMALIZE_LITERALS = False
-# rdflib logs every literal it cannot map to a Python value ("1985-13-01"^^xsd:date): those are
-# data, kept as written.
+XSD = "http://www.w3.org/2001/XMLSchema#"
+INTEGERS = {URIRef(XSD + t) for t in ("integer", "long", "int")}
+XSD_BOOLEAN = URIRef(XSD + "boolean")
+# rdflib logs every literal it cannot map to a Python value: those are data, kept as written.
 logging.getLogger("rdflib").setLevel(logging.CRITICAL)
 
 
@@ -57,6 +58,10 @@ def canon(g):
     for s, p, o in g:
         if isinstance(o, Literal) and o.datatype is None and o.language is None:
             o = Literal(str(o), datatype=XS)
+        elif isinstance(o, Literal) and o.datatype in INTEGERS:
+            o = Literal(str(int(str(o))), datatype=o.datatype)
+        elif isinstance(o, Literal) and o.datatype == XSD_BOOLEAN:
+            o = Literal({"1": "true", "0": "false"}.get(str(o), str(o)), datatype=o.datatype)
         out.add((s, p, o))
     return out
 
@@ -211,9 +216,6 @@ def tail(s, n=8):
     return "\n".join([l for l in s.strip().splitlines() if l.strip()][-n:])
 
 
-XSD_BOOLEAN = URIRef("http://www.w3.org/2001/XMLSchema#boolean")
-
-
 def defect(want, got):
     """The processor defect that turns the triple `want` into `got`, if one does."""
     if want[:2] != got[:2] or not isinstance(want[2], Literal) or not isinstance(got[2], Literal):
@@ -221,8 +223,6 @@ def defect(want, got):
     w, g = want[2], got[2]
     if w.datatype == g.datatype == XSD_BOOLEAN and (str(w), str(g)) in {("true", "t"), ("false", "f")}:
         return "F5"
-    if str(w) == str(g) and g.datatype == XS and w.datatype not in (None, XS) and w.language is None:
-        return "F9"
     return None
 
 
