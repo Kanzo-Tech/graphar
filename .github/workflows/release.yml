@@ -7,8 +7,7 @@ name: release
 #
 # THE TAG DECIDES THE VERSION, and `check` refuses a tag that disagrees with the committed
 # versions: `v0.1.0-alpha.0` needs every Cargo.toml and package.json at `0.1.0-alpha.0`. Bump them
-# in a commit, merge it, then tag that commit. Every artifact shares one version; `graphar-bench`
-# is `publish = false` and has none to agree with.
+# in a commit, merge it, then tag that commit. Every artifact shares one version.
 #
 # A prerelease tag (`v0.2.0-rc.1`) publishes to npm under its identifier as the dist-tag (`rc`),
 # so `latest` stays where it was. crates.io has no dist-tags; a prerelease version is skipped by

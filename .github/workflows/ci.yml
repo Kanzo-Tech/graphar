@@ -35,7 +35,7 @@ jobs:
           -p graphar-info -p graphar-parquet -p graphar-stats -p graphar-rdf
       - name: no tokio in the wasm32 build
         run: |
-          if cargo tree --target wasm32-unknown-unknown -e normal --workspace --exclude graphar-bench --locked --prefix none \
+          if cargo tree --target wasm32-unknown-unknown -e normal --workspace --locked --prefix none \
               | grep -E '^tokio '; then
             echo "tokio reaches the wasm32 build" >&2
             exit 1

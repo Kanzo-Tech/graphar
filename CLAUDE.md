@@ -10,11 +10,7 @@
 - **Minimal and generic.** One way to express each thing; grep for the existing one before adding.
 - **Every crate builds for `wasm32-unknown-unknown`**: no `tokio` in its normal dependencies, no
   network, and no IO but a thin file-system convenience or the caller's `object_store`. The model is
-  load/dump over `&str`. CI checks both. `bench/` is the one exception: `publish = false`, native,
-  and it links DuckDB and HDT to measure against them.
-- **The paper's numbers come from `bench/results.json` and nowhere else.** `cargo run --release -p
-  graphar-bench` writes it with the commit and host; a figure in "Leveraging Parquet for
-  representing RDF data" that the file does not hold is not a figure.
+  load/dump over `&str`. CI checks both.
 - **YAML is `serde_yaml_ng`.** `serde_yml` is banned (RUSTSEC-2025-0068).
 - `tests/fixtures/` are vendored unchanged; their source commit is in the README there. Do not edit
   them. A fixture we refuse is listed with the reason in the test that refuses it.

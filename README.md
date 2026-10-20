@@ -67,10 +67,6 @@ back as `"31"^^xsd:integer`. The mapping delimits every SQL identifier and write
 PostgreSQL and RMLMapper on PostgreSQL, against the triples written. One defect of RMLMapper 8.1.0
 is explained rather than hidden there: booleans read from PostgreSQL as `t`/`f`.
 
-[`bench/`](bench) is the measurement behind "Leveraging Parquet for representing RDF data": size,
-write time and access of GraphAr against N-Triples, HDT and an S/P/O Parquet table, written to
-[`bench/results.json`](bench/results.json) with the commit and the host it ran on.
-
 ## Releasing
 
 A release is a GitHub Release, and its body is the release notes: there is no CHANGELOG. The tag
