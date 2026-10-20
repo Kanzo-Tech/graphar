@@ -1,10 +1,11 @@
-"""The RDF reading of a graph graphar-rdf wrote, through independent RML processors.
+"""The RDF reading of a graph graphar-rdf wrote, through independent RML and R2RML processors.
 
     python3 -I conformance/rml/run.py <graph dir> <expected .ttl|.nt> [--pg DSN] [--rmlmapper JAR]
 
 Loads every vertex and edge table of the graph into DuckDB (and, with --pg, PostgreSQL), runs the
-graph's mapping.ttl through Morph-KGC on each and through RMLMapper on PostgreSQL, and compares each
-output with the expected triples as RDF graphs (a simple literal as xsd:string, and an integer or
+graph's mapping.ttl (RML-Core) and mapping.r2rml.ttl (R2RML), the two serializations of one plan,
+through Morph-KGC on each and through RMLMapper on PostgreSQL, and compares each output with the
+expected triples as RDF graphs (a simple literal as xsd:string, and an integer or
 boolean literal in its canonical lexical form, which is how graphar-rdf stores and reads it back). Prints one JSON object per processor and exits non-zero if any differs or fails.
 
 The mapping is run **as written**, but for three defects of Morph-KGC 2.10 that no mapping can
@@ -38,6 +39,7 @@ from rdflib import RDF, BNode, Graph, Literal, URIRef
 from rdflib.compare import graph_diff, to_isomorphic
 
 RML = "http://w3id.org/rml/"
+RR = "http://www.w3.org/ns/r2rml#"
 D2RQ = "http://www.wiwiss.fu-berlin.de/suhl/bizer/D2RQ/0.1#"
 XS = URIRef("http://www.w3.org/2001/XMLSchema#string")
 BASE = "http://graphar-rdf.invalid/mapping.ttl"
@@ -136,21 +138,21 @@ def load_pg(con, dsn):
     return db
 
 
-def mapping(graph):
+def mapping(graph, name="mapping.ttl"):
     g = Graph()
-    g.parse(str(graph / "mapping.ttl"), format="turtle", publicID=BASE)
+    g.parse(str(graph / name), format="turtle", publicID=BASE)
     return g
 
 
-def refs_under(g, node, seen=None):
+def refs_under(g, node, ref=RML + "reference", seen=None):
     seen = seen or set()
     out = set()
     for p, o in g.predicate_objects(node):
-        if str(p) == RML + "reference":
+        if str(p) == ref:
             out.add(str(o))
-        elif str(p) != RML + "logicalSource" and isinstance(o, BNode) and o not in seen:
+        elif str(p) not in (RML + "logicalSource", RR + "logicalTable") and isinstance(o, BNode) and o not in seen:
             seen.add(o)
-            out |= refs_under(g, o, seen)
+            out |= refs_under(g, o, ref, seen)
     return out
 
 
@@ -176,15 +178,35 @@ def morph_mapping(graph, work):
     return out
 
 
-def morph(graph, work, db_url, tag):
+def morph_r2rml(graph, work):
+    """F7 on R2RML: the columns Morph-KGC clobbers read under other names. R2RML's logical tables
+    are its own, so F6 does not arise."""
+    g = mapping(graph, "mapping.r2rml.ttl")
+    for tm, lt in list(g.subject_objects(URIRef(RR + "logicalTable"))):
+        table = g.value(lt, URIRef(RR + "tableName"))
+        inner = f"SELECT * FROM {table}" if table is not None else str(g.value(lt, URIRef(RR + "sqlQuery")))
+        clash = [c for c in CLASH if c in refs_under(g, tm, RR + "column")]
+        g.remove((lt, URIRef(RR + "tableName"), None))
+        extra = "".join(f', q."{c}" AS "{c}__"' for c in clash)
+        g.set((lt, URIRef(RR + "sqlQuery"), Literal(f"SELECT q.*{extra} FROM ({inner}) AS q")))
+    for node, p, o in list(g.triples((None, URIRef(RR + "column"), None))):
+        if str(o) in CLASH:
+            g.set((node, p, Literal(f"{o}__")))
+    out = work / "morph-r2rml.ttl"
+    g.serialize(str(out), format="turtle")
+    return out
+
+
+def morph(graph, work, db_url, tag, r2rml=False):
     out = work / f"{tag}.nt"
     cfg = work / f"{tag}.ini"
+    m = morph_r2rml(graph, work) if r2rml else morph_mapping(graph, work)
     cfg.write_text(
         "[CONFIGURATION]\n"
         f"output_file={out}\nnumber_of_processes=1\n"
         # F8.
         "na_values=,nan,None\n"
-        f"[DataSource1]\nmappings={morph_mapping(graph, work)}\ndb_url={db_url}\n"
+        f"[DataSource1]\nmappings={m}\ndb_url={db_url}\n"
     )
     r = subprocess.run([sys.executable, "-m", "morph_kgc", str(cfg)], capture_output=True, text=True, timeout=1800)
     if r.returncode != 0 or not out.exists():
@@ -206,6 +228,22 @@ def rmlmapper(graph, work, jar, dsn, db):
     g.serialize(str(m), format="turtle")
     out = work / "rmlmapper.nq"
     r = subprocess.run(["java", "-jar", jar, "-m", str(m), "-o", str(out), "-s", "nquads"],
+                       capture_output=True, text=True, timeout=1800)
+    if r.returncode != 0 or not out.exists():
+        raise RuntimeError(tail(r.stdout + r.stderr))
+    return parse(out, "nt")
+
+
+def rmlmapper_r2rml(graph, work, jar, dsn, db):
+    """R2RML has no source: the database is RMLMapper's command line."""
+    params = dict(kv.split("=", 1) for kv in dsn.split())
+    url = f"jdbc:postgresql://{params.get('host', '127.0.0.1')}:{params.get('port', '5432')}/{db}"
+    # Written out with the base the RML run is given: RMLMapper resolves `<#Name>` against none.
+    m = work / "rmlmapper-r2rml.ttl"
+    mapping(graph, "mapping.r2rml.ttl").serialize(str(m), format="turtle")
+    out = work / "rmlmapper-r2rml.nq"
+    r = subprocess.run(["java", "-jar", jar, "-m", str(m), "-o", str(out), "-s", "nquads",
+                        "-dsn", url, "-u", params.get("user", "postgres"), "-p", params.get("password", "")],
                        capture_output=True, text=True, timeout=1800)
     if r.returncode != 0 or not out.exists():
         raise RuntimeError(tail(r.stdout + r.stderr))
@@ -267,13 +305,17 @@ def main():
             pgdb = load_pg(con, args.pg)
         con.close()
         runs["morph-kgc/duckdb"] = lambda: morph(args.graph, work, f"duckdb:///{db}", "morph-duckdb")
+        runs["morph-kgc/duckdb/r2rml"] = lambda: morph(args.graph, work, f"duckdb:///{db}", "morph-duckdb-r2rml", True)
         if pgdb:
             params = dict(kv.split("=", 1) for kv in args.pg.split())
             url = (f"postgresql+psycopg2://{params.get('user', 'postgres')}:{params.get('password', '')}"
                    f"@{params.get('host', '127.0.0.1')}:{params.get('port', '5432')}/{pgdb}")
             runs["morph-kgc/postgresql"] = lambda: morph(args.graph, work, url, "morph-pg")
+            runs["morph-kgc/postgresql/r2rml"] = lambda: morph(args.graph, work, url, "morph-pg-r2rml", True)
             if args.rmlmapper:
                 runs["rmlmapper/postgresql"] = lambda: rmlmapper(args.graph, work, args.rmlmapper, args.pg, pgdb)
+                runs["rmlmapper/postgresql/r2rml"] = lambda: rmlmapper_r2rml(
+                    args.graph, work, args.rmlmapper, args.pg, pgdb)
         ok = True
         for name, run in runs.items():
             try:

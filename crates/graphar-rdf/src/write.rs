@@ -1,6 +1,6 @@
 //! Triples and a schema to a GraphAr graph.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_array::builder::ArrayBuilder;
@@ -22,7 +22,7 @@ use parquet::schema::types::ColumnPath;
 
 use crate::schema::{Cardinality, Column, Error, Object, Schema, Storage, user_types};
 use crate::term::{Value, parse};
-use crate::{MAPPING_FILE, RDF_LANG_STRING, RDF_TYPE, SUBJECT, mapping};
+use crate::{MAPPING_FILE, R2RML_FILE, RDF_LANG_STRING, RDF_TYPE, SUBJECT, plan, r2rml, rml};
 
 /// How [`write()`] writes.
 #[derive(Clone, Debug)]
@@ -66,7 +66,8 @@ pub struct Written {
 type Place = (usize, usize);
 
 /// **Writes `triples` as the GraphAr graph `schema` reads**, under `root`: every vertex table,
-/// every edge table, a Puffin file per vertex type of several chunks, `mapping.ttl`, and the
+/// every edge table, a Puffin file per vertex type of several chunks, `mapping.ttl` and
+/// `mapping.r2rml.ttl`, and the
 /// information files last, so a reader that finds the graph document finds everything it names.
 ///
 /// Only a graph that conforms to the closed reading of the schema is written, and every triple of
@@ -91,7 +92,8 @@ pub async fn write(
     triples: impl IntoIterator<Item = Triple>,
     options: &Options,
 ) -> Result<Written, Error> {
-    let text = mapping(schema)?;
+    let plan = plan(schema)?;
+    let text = rml(&plan);
     let info = schema.graph_info(&options.name, options.chunk_size);
 
     let distinct: HashSet<Triple> = triples.into_iter().collect();
@@ -251,7 +253,34 @@ pub async fn write(
         edges.push((edge.triple(), n));
     }
 
+    // The languages of each language-tagged column, which R2RML writes a triples map apiece.
+    let mut languages: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (v, vertex) in schema.vertices.iter().enumerate() {
+        for (c, column) in vertex.columns.iter().enumerate() {
+            if column.storage() != Storage::LangString {
+                continue;
+            }
+            let tags = cells[v][c]
+                .iter()
+                .flatten()
+                .filter_map(|value| match value {
+                    Value::Text(t) => t.split_once('@').map(|(tag, _)| tag.to_owned()),
+                    _ => None,
+                });
+            languages
+                .entry(format!("{}_{}", vertex.label, column.name))
+                .or_default()
+                .extend(tags);
+        }
+    }
     put(store, root, MAPPING_FILE, text.into_bytes()).await?;
+    put(
+        store,
+        root,
+        R2RML_FILE,
+        r2rml(&plan, &languages).into_bytes(),
+    )
+    .await?;
     write_info(store, root, &info).await?;
     Ok(Written {
         info,

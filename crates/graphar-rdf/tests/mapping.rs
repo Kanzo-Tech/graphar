@@ -155,3 +155,37 @@ fn a2_refuses_one_iri_for_two_things() {
         "a relation is not a column of its source"
     );
 }
+
+#[test]
+fn rml_and_r2rml_are_one_plan_and_r2rml_has_a_map_per_language() {
+    let plan = graphar_rdf::plan(&schema()).expect("a plan");
+    assert_eq!(graphar_rdf::rml(&plan), mapping(&schema()).expect("RML"));
+    // The plan in the algebra: the tagged column is the one extension the algebra lacks.
+    let algebra = plan.to_string();
+    assert!(algebra.contains("toLangLiteral(value, lang)"), "{algebra}");
+    assert!(algebra.starts_with("∪("));
+
+    let languages = [(
+        "Order_labels".to_owned(),
+        ["en", "es"].map(String::from).into(),
+    )]
+    .into();
+    let r2rml = graphar_rdf::r2rml(&plan, &languages);
+    let triples: Vec<_> = TurtleParser::new()
+        .with_base_iri("http://example.org/mapping.r2rml.ttl")
+        .expect("a base")
+        .for_slice(r2rml.as_bytes())
+        .collect::<Result<_, _>>()
+        .expect("R2RML is Turtle");
+    let language = |tag: &str| {
+        triples.iter().any(|t| {
+            t.predicate.as_str() == "http://www.w3.org/ns/r2rml#language"
+                && matches!(&t.object, Term::Literal(l) if l.value() == tag)
+        })
+    };
+    assert!(language("en") && language("es"));
+    assert!(r2rml.contains("WHERE q.\\\"lang\\\" = 'es'"), "{r2rml}");
+    // `note` holds no language here, so it has no triples map: it would read nothing.
+    assert!(!r2rml.contains("Order_note"));
+    assert!(!r2rml.contains("languageMap"));
+}

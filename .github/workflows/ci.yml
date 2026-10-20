@@ -61,9 +61,9 @@ jobs:
           git add -N conformance
           git diff --exit-code --stat -- conformance
 
-  # graphar-stats' Theta sketches read by Apache DataSketches itself, and graphar-rdf's mapping run
-  # by two RML processors on two engines: Morph-KGC on DuckDB and PostgreSQL, RMLMapper on
-  # PostgreSQL. Each must give back exactly the triples the graph was written from.
+  # graphar-stats' Theta sketches read by Apache DataSketches itself, and graphar-rdf's two mappings,
+  # RML-Core and R2RML, run by two processors on two engines: Morph-KGC on DuckDB and PostgreSQL,
+  # RMLMapper on PostgreSQL. Each must give back exactly the triples the graph was written from.
   interop:
     runs-on: ubuntu-latest
     services:
@@ -89,7 +89,7 @@ jobs:
         run: cargo run -q -p graphar-stats --example theta --locked | python3 -I crates/graphar-stats/tests/read_sketch.py
       - name: RMLMapper
         run: curl -sSfL -o rmlmapper.jar https://github.com/RMLio/rmlmapper-java/releases/download/v8.1.0/rmlmapper-8.1.0-r380-all.jar
-      - name: the mapping on Morph-KGC and RMLMapper
+      - name: the mappings on Morph-KGC and RMLMapper
         run: |
           d=crates/graphar-rdf/tests/data
           cargo run -q -p graphar-rdf --example write --locked -- $d/people.shacl.ttl $d/people.ttl people 2
