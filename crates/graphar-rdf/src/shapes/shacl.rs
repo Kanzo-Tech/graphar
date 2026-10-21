@@ -10,7 +10,7 @@ use shacl::ir::{IRSchema, RecursionSemantics};
 use shacl::rdf::ShaclParser;
 use shacl::types::{NodeKind, Value};
 
-use super::{Shape, Shapes, Target};
+use super::{Shape, Shapes, Syntax, Target};
 use crate::schema::{Cardinality, Error, Object};
 use crate::validate::Document;
 use crate::{RDF_LANG_STRING, RDF_TYPE};
@@ -32,6 +32,8 @@ pub fn from_turtle(text: &str) -> Result<Shapes, Error> {
     Ok(super::read(
         &shapes(&schema)?,
         Document::Shacl(Box::new(compiled)),
+        Syntax::ShaclTurtle,
+        text,
     ))
 }
 

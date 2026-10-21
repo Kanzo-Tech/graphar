@@ -22,9 +22,6 @@ pub struct Schema {
     pub vertices: Vec<VertexType>,
     /// The edge types, each a predicate between the subjects of two vertex types.
     pub edges: Vec<EdgeType>,
-    /// Triples about the IRIs the schema names (a class's `rdfs:label`, say), written in the
-    /// mapping as RML-Core §3.2 allows.
-    pub annotations: Vec<oxrdf::Triple>,
 }
 
 /// A vertex type: a table whose rows are subjects, the `subject` column their IRIs.
@@ -36,6 +33,10 @@ pub struct VertexType {
     /// the mapping writes as the triples map's class and no column stores. A type is not a class:
     /// its rows are the subjects that validate against its shape ([`crate::Typing`]).
     pub class: Option<String>,
+    /// The IRI of the shape the type is, when the schema was read from shapes
+    /// ([`crate::shapes`]): every row validates against it, and the mapping says so of the type's
+    /// triples map (`dct:conformsTo`). `None` for a schema a host builds.
+    pub shape: Option<String>,
     /// The columns beside `subject`, in table order.
     pub columns: Vec<Column>,
 }
@@ -248,6 +249,9 @@ impl Schema {
             }
             if let Some(class) = &v.class {
                 iri(class)?;
+            }
+            if let Some(shape) = &v.shape {
+                iri(shape)?;
             }
             let mut names: HashMap<&str, ()> = HashMap::new();
             let mut predicates: HashMap<&str, String> = HashMap::new();

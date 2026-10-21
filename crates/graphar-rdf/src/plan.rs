@@ -23,25 +23,27 @@
 
 use std::fmt;
 
-use oxrdf::Triple;
-
 use crate::schema::{Cardinality, Error, Object, Schema, Storage};
 use crate::{RDF_LANG_STRING, RDF_TYPE, SUBJECT, XSD_STRING};
 
-/// The plan of a schema: a union of [`Map`]s, and the constant triples about the IRIs it names.
+/// The plan of a schema: a union of [`Map`]s.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plan {
     /// The branches, grouped by source and subject.
     pub maps: Vec<Map>,
-    /// Triples about the IRIs the schema names, constant in every reading (RML-Core §3.2).
-    pub annotations: Vec<Triple>,
 }
 
 /// The branches of a plan that share a source and a subject.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Map {
-    /// Its name, unique in the plan.
+    /// Its name, unique in the plan, and a path of the GraphAr names it reads: `<type>` for a
+    /// vertex type's map, `<type>/<column>` for a column's, `<edge>` (the edge type's
+    /// `<source>_<label>_<destination>`) for an edge type's. No name holds a `/`, so the path is
+    /// unambiguous, and the mapping writes it as the triples map's fragment, `/` and all.
     pub name: String,
+    /// The shape every subject the map produces validates against: its vertex type's, for the
+    /// type's own map. No branch: a statement about the map, `dct:conformsTo` in the mapping.
+    pub shape: Option<String>,
     /// The relation it reads.
     pub source: Source,
     /// `a_s`.
@@ -121,9 +123,9 @@ impl Expr {
     }
 }
 
-/// The plan of `schema`: per vertex type a map over its table, with its class and its
-/// single-valued columns; per set or single language-tagged column a map over its elements or its
-/// fields; per edge type a map over its join.
+/// The plan of `schema`: per vertex type a map over its table, with its class, its shape and its
+/// single-valued columns (no map when it has none of the three); per set or single
+/// language-tagged column a map over its elements or its fields; per edge type a map over its join.
 ///
 /// # Errors
 /// What [`Schema::check`] refuses.
@@ -138,9 +140,10 @@ pub fn plan(schema: &Schema) -> Result<Plan, Error> {
             .filter(|c| c.cardinality == Cardinality::Single && c.storage() != Storage::LangString)
             .map(|c| (c.predicate.clone(), object(&c.object, &c.name)))
             .collect();
-        if v.class.is_some() || !scalars.is_empty() {
+        if v.class.is_some() || v.shape.is_some() || !scalars.is_empty() {
             maps.push(Map {
                 name: v.label.clone(),
+                shape: v.shape.clone(),
                 source: Source::Table {
                     table: v.label.clone(),
                 },
@@ -164,7 +167,8 @@ pub fn plan(schema: &Schema) -> Result<Plan, Error> {
                 Cardinality::Single => continue,
             };
             maps.push(Map {
-                name: format!("{}_{}", v.label, c.name),
+                name: format!("{}/{}", v.label, c.name),
+                shape: None,
                 source,
                 subject: subject(SUBJECT),
                 classes: Vec::new(),
@@ -175,6 +179,7 @@ pub fn plan(schema: &Schema) -> Result<Plan, Error> {
     for e in &schema.edges {
         maps.push(Map {
             name: e.triple(),
+            shape: None,
             source: Source::Edge {
                 edge: e.triple(),
                 source: e.source.clone(),
@@ -185,10 +190,7 @@ pub fn plan(schema: &Schema) -> Result<Plan, Error> {
             objects: vec![(e.predicate.clone(), subject("target"))],
         });
     }
-    Ok(Plan {
-        maps,
-        annotations: schema.annotations.clone(),
-    })
+    Ok(Plan { maps })
 }
 
 /// The expression of a column's values, read from `attribute`.

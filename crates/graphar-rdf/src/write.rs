@@ -23,7 +23,9 @@ use parquet::schema::types::ColumnPath;
 use crate::schema::{Cardinality, Column, Error, Object, Storage, user_types};
 use crate::term::{Value, parse};
 use crate::typing::{Typing, types};
-use crate::{MAPPING_FILE, R2RML_FILE, RDF_LANG_STRING, RDF_TYPE, SUBJECT, plan, r2rml, rml};
+use crate::{
+    MAPPING_FILE, R2RML_FILE, RDF_LANG_STRING, RDF_TYPE, SHAPES_KEY, SUBJECT, plan, r2rml, rml,
+};
 
 /// How [`write()`] writes.
 #[derive(Clone, Debug)]
@@ -63,7 +65,14 @@ pub struct Written {
 type Place = (usize, usize);
 
 /// **Writes `triples` as the GraphAr graph `schema` reads**, under `root`: every vertex table,
-/// every edge table, `mapping.ttl` and `mapping.r2rml.ttl`, and the information files last, so a reader that finds the graph document finds everything it names.
+/// every edge table, `mapping.ttl` and `mapping.r2rml.ttl`, the shape document, and the
+/// information files last, so a reader that finds the graph document finds everything it names.
+///
+/// Under [`Typing::Validate`] the shape document is saved exactly as it was read, as
+/// [`crate::SHACL_FILE`], [`crate::SHEXC_FILE`] or [`crate::SHEXJ_FILE`] by its syntax, and the
+/// graph document's `extra_info` names it under [`SHAPES_KEY`]: the labels of the types and
+/// properties are the shapes', and a reader finds them there. Under [`Typing::Assume`] there is
+/// no shape document to save, and none is written.
 ///
 /// Only a graph that conforms to the closed reading of the schema is written, and every triple of
 /// it has one place:
@@ -93,7 +102,17 @@ pub async fn write(
     let schema = typing.schema();
     let plan = plan(schema)?;
     let text = rml(&plan);
-    let info = schema.graph_info(&options.name, options.chunk_size);
+    let mut info = schema.graph_info(&options.name, options.chunk_size);
+    // The shape document validated against, saved as it was read, and named in the graph document.
+    let shapes = match typing {
+        Typing::Validate(shapes) => {
+            let file = shapes.syntax().file();
+            info.extra_info
+                .push((SHAPES_KEY.to_owned(), file.to_owned()));
+            Some((file, shapes.text()))
+        }
+        Typing::Assume(..) => None,
+    };
 
     let distinct: HashSet<Triple> = triples.into_iter().collect();
     let count = distinct.len() as u64;
@@ -255,7 +274,7 @@ pub async fn write(
                     _ => None,
                 });
             languages
-                .entry(format!("{}_{}", vertex.label, column.name))
+                .entry(format!("{}/{}", vertex.label, column.name))
                 .or_default()
                 .extend(tags);
         }
@@ -268,6 +287,9 @@ pub async fn write(
         r2rml(&plan, &languages).into_bytes(),
     )
     .await?;
+    if let Some((file, text)) = shapes {
+        put(store, root, file, text.as_bytes().to_vec()).await?;
+    }
     write_info(store, root, &info).await?;
     Ok(Written {
         info,

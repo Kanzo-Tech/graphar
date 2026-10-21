@@ -13,7 +13,7 @@ use shex_ast::{
 };
 use shex_validation::ValidatorConfig;
 
-use super::{Shape, Shapes, Target};
+use super::{Shape, Shapes, Syntax, Target};
 use crate::schema::{Cardinality, Error, Object};
 use crate::validate::Document;
 use crate::{RDF_LANG_STRING, RDF_TYPE};
@@ -27,7 +27,7 @@ const SOURCE: &str = "urn:graphar-rdf:shex";
 /// [`Error::Shapes`] when the document is not a ShExJ schema.
 pub fn from_json(text: &str) -> Result<Shapes, Error> {
     let shex = ShEx::from_reader(text.as_bytes()).map_err(|e| Error::Shapes(e.to_string()))?;
-    compiled(&shex)
+    compiled(&shex, Syntax::ShExJ, text)
 }
 
 /// The shapes of a ShEx schema in ShExC, the compact syntax.
@@ -37,11 +37,11 @@ pub fn from_json(text: &str) -> Result<Shapes, Error> {
 pub fn from_compact(text: &str) -> Result<Shapes, Error> {
     let source = IriS::new_unchecked(SOURCE);
     let shex = ShExParser::parse(text, None, &source).map_err(|e| Error::Shapes(e.to_string()))?;
-    compiled(&shex)
+    compiled(&shex, Syntax::ShExC, text)
 }
 
 /// The shapes of `shex`, and the schema rudof's validator runs on, compiled as rudof compiles it.
-fn compiled(shex: &ShEx) -> Result<Shapes, Error> {
+fn compiled(shex: &ShEx, syntax: Syntax, text: &str) -> Result<Shapes, Error> {
     let source = IriS::new_unchecked(SOURCE);
     let mut map_state = MapState::default();
     let registry = SemanticActionsRegistry::default();
@@ -56,7 +56,12 @@ fn compiled(shex: &ShEx) -> Result<Shapes, Error> {
             ValidatorConfig::default().external_resolvers(),
         )
         .map_err(|e| Error::Shapes(e.to_string()))?;
-    Ok(super::read(&shapes(shex)?, Document::ShEx(Box::new(ir))))
+    Ok(super::read(
+        &shapes(shex)?,
+        Document::ShEx(Box::new(ir)),
+        syntax,
+        text,
+    ))
 }
 
 fn shapes(shex: &ShEx) -> Result<Vec<Shape>, Error> {

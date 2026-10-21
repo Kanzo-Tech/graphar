@@ -67,6 +67,7 @@ pub(crate) fn types(
             let subjects: Vec<&str> = by_subject.keys().map(String::as_str).collect();
             let triples: Vec<&Triple> = by_subject.values().flatten().collect();
             let validated = validate(shapes, &subjects, &triples)?;
+            let ids = shapes.ids();
             let predicates: Vec<HashSet<&str>> = schema
                 .vertices
                 .iter()
@@ -95,7 +96,7 @@ pub(crate) fn types(
                     .filter(|&v| match closed(&predicates[v], &ts) {
                         None => true,
                         Some(reason) => {
-                            reasons.push(format!("{}: {reason}", shapes.shapes[v]));
+                            reasons.push(format!("{}: {reason}", ids[v]));
                             false
                         }
                     })

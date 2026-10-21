@@ -76,6 +76,17 @@ is explained rather than hidden there: booleans read from PostgreSQL as `t`/`f`.
 (RMLio/mappingloom-rs) translates `mapping.ttl` into the same plan: a pipeline per triples map, over
 its source, writing its triples.
 
+Mapping and shapes are each their own file. The mapping is RML-Core (and R2RML) and says only how
+each table and column becomes triples; each vertex type's triples map adds one statement,
+`dct:conformsTo` its shape, which generates no triple and is what the typing guaranteed of every
+row. Under `Typing::Validate` the writer saves the shape document beside the graph exactly as it
+read it, as `shapes.ttl` (SHACL in Turtle), `shapes.shex` (ShExC) or `shapes.shexj` (ShExJ), and
+the graph document's `extra_info` names it under the key `shapes`; under `Typing::Assume` there is
+none. Labels and descriptions are the shapes' (`sh:name`, `sh:description`; in ShExJ, `rdfs:label`
+and `rdfs:comment` annotations) and are read from there: without shapes there are no labels, and a
+consumer shows an IRI's local name. A triples map is named by the GraphAr names it reads:
+`<#Person>`, `<#Person/nick>`, `<#Person_knows_Person>`.
+
 ## Releasing
 
 A release is a GitHub Release, and its body is the release notes: there is no CHANGELOG. The tag

@@ -5,10 +5,10 @@
 //! reading of those tables is a plan in the mapping algebra of Min Oo and Hartig, written beside
 //! them in RML-Core as `mapping.ttl` and in R2RML as `mapping.r2rml.ttl`.
 //!
-//! - [`Schema`] is that reading: per vertex type the class its shape fixes, if any, per column its
-//!   predicate, object kind
-//!   and cardinality, per edge type its predicate. A shape document makes one ([`shapes`]), and so
-//!   does a host that already has a typed graph (fossil, from its program's graph type).
+//! - [`Schema`] is that reading: per vertex type its shape and the class the shape fixes, if any,
+//!   per column its predicate, object kind and cardinality, per edge type its predicate. A shape
+//!   document makes one ([`shapes`]), and so does a host that already has a typed graph (fossil,
+//!   from its program's graph type), whose types have no shape.
 //! - [`plan()`] is the reading of a [`Schema`] in the algebra: a union of [`Map`]s, one per vertex
 //!   type, per edge type and per multi-valued or language-tagged column. It reads no data, so a
 //!   host can ask for it, or for [`mapping()`], its RML-Core, before writing. [`rml()`] and
@@ -17,8 +17,8 @@
 //!   ([`Typing::Validate`], rudof's SHACL or ShEx validator), or a shape map the caller states
 //!   ([`Typing::Assume`]).
 //! - [`write()`] places every triple by the schema and writes the graph, each chunk one row group
-//!   whose Parquet `Statistics` carry its distinct counts, then the two mappings, then the
-//!   information files.
+//!   whose Parquet `Statistics` carry its distinct counts, then the two mappings, then the shape
+//!   document it validated against, as it was read, then the information files.
 //! - [`read()`] is the plan evaluated over the written tables, natively: the triples it reads are
 //!   the triples [`write()`] was given, up to the canonical lexical form of a literal
 //!   (**Statement R**). The same holds through a processor that runs either mapping on the tables;
@@ -67,3 +67,14 @@ pub const SUBJECT: &str = "subject";
 pub const MAPPING_FILE: &str = "mapping.ttl";
 /// The name of the R2RML document [`write()`] puts beside it.
 pub const R2RML_FILE: &str = "mapping.r2rml.ttl";
+/// The name [`write()`] saves a SHACL shapes graph in Turtle as, beside the mappings.
+pub const SHACL_FILE: &str = "shapes.ttl";
+/// The name [`write()`] saves a ShEx schema in ShExC as.
+pub const SHEXC_FILE: &str = "shapes.shex";
+/// The name [`write()`] saves a ShEx schema in ShExJ as.
+pub const SHEXJ_FILE: &str = "shapes.shexj";
+/// The graph document's `extra_info` key whose value is the name of the shape document saved
+/// beside the graph, one of the three above; absent when none was.
+pub const SHAPES_KEY: &str = "shapes";
+/// `dct:conformsTo`: the shape the subjects of a vertex type's triples map validate against.
+pub const DCT_CONFORMS_TO: &str = "http://purl.org/dc/terms/conformsTo";

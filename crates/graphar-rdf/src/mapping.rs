@@ -11,6 +11,17 @@
 //! each over its query filtered to that language; which languages those are is the data's, so the
 //! R2RML document is the writer's to make.
 //!
+//! **A vertex type's triples map says which shape its subjects conform to**: `dct:conformsTo`
+//! (DCMI Metadata Terms, "an established standard to which the described resource conforms"),
+//! the shape's IRI, when the type was read from shapes. It generates no triple; it is the typing's
+//! meaning, which [`crate::Typing`] guaranteed of every row. That is the only triple outside
+//! RML-Core and R2RML: the mapping says how the tables become triples and nothing about labels,
+//! which are the shapes' (`shapes.ttl`, …, beside it).
+//!
+//! **A triples map is named by the GraphAr names it reads** ([`Map::name`]): `<#Person>`,
+//! `<#Person/nick>`, `<#Person_knows_Person>`, each name percent-encoded and `/` between them; an
+//! R2RML map of one language adds `/<tag>`.
+//!
 //! **`rml:source` is an anonymous `rml:Source`.** The logical sources are table names a host binds
 //! to the chunks when it opens the graph; a source that named a file would claim what the host
 //! decides. R2RML has no source at all: its tables are the database's.
@@ -22,9 +33,8 @@ use crate::XSD;
 use crate::plan::{Expr, Map, Plan, Source, plan, quoted};
 use crate::schema::{Error, Schema, plain};
 
-const RML: &str =
-    "@prefix rml: <http://w3id.org/rml/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n";
-const R2RML: &str = "@prefix rr: <http://www.w3.org/ns/r2rml#> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n";
+const RML: &str = "@prefix rml: <http://w3id.org/rml/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n@prefix dct: <http://purl.org/dc/terms/> .\n";
+const R2RML: &str = "@prefix rr: <http://www.w3.org/ns/r2rml#> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n@prefix dct: <http://purl.org/dc/terms/> .\n";
 
 /// `mapping.ttl` for `schema`: the RML-Core serialization of its [`plan`].
 ///
@@ -73,9 +83,9 @@ pub fn rml(plan: &Plan) -> String {
             &source,
             &subject,
             &poms,
+            m.shape.as_deref(),
         );
     }
-    annotations(&mut out, plan);
     out
 }
 
@@ -107,13 +117,12 @@ pub fn r2rml(plan: &Plan, languages: &BTreeMap<String, BTreeSet<String>>) -> Str
             r2rml_map(
                 &mut out,
                 m,
-                &format!("{}.{lang}", m.name),
+                &format!("{}/{lang}", m.name),
                 &source,
                 Some(lang),
             );
         }
     }
-    annotations(&mut out, plan);
     out
 }
 
@@ -146,7 +155,15 @@ fn r2rml_map(out: &mut String, m: &Map, name: &str, source: &str, lang: Option<&
             )
         })
         .collect();
-    triples_map(out, "rr:logicalTable", name, source, &subject, &poms);
+    triples_map(
+        out,
+        "rr:logicalTable",
+        name,
+        source,
+        &subject,
+        &poms,
+        m.shape.as_deref(),
+    );
 }
 
 /// A term map's body in vocabulary `ns` (`rml` or `rr`): `rml:reference`, `rr:column`.
@@ -194,6 +211,7 @@ fn triples_map(
     source: &str,
     subject: &str,
     poms: &[String],
+    shape: Option<&str>,
 ) {
     let ns = logical.split(':').next().expect("a prefixed name");
     write!(
@@ -202,19 +220,13 @@ fn triples_map(
         fragment(id)
     )
     .expect("a String");
+    if let Some(shape) = shape {
+        write!(out, " ;\n  dct:conformsTo {}", iri(shape)).expect("a String");
+    }
     for pom in poms {
         write!(out, " ;\n  {ns}:predicateObjectMap {pom}").expect("a String");
     }
     out.push_str(" .\n");
-}
-
-fn annotations(out: &mut String, plan: &Plan) {
-    if !plan.annotations.is_empty() {
-        out.push('\n');
-        for t in &plan.annotations {
-            writeln!(out, "{t} .").expect("a String");
-        }
-    }
 }
 
 /// An IRI, `xsd:` where it is one.
@@ -243,11 +255,12 @@ fn literal(text: &str) -> String {
 }
 
 /// A triples map's name, a fragment of the document: the name with every character outside
-/// unreserved ones percent-encoded.
+/// unreserved ones and `/` percent-encoded. A `/` separates the names of [`Map::name`], none of
+/// which holds one (a fragment may: RFC 3986 §3.5).
 fn fragment(name: &str) -> String {
     let mut out = String::new();
     for b in name.bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
             out.push(char::from(b));
         } else {
             write!(out, "%{b:02X}").expect("a String");

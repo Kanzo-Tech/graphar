@@ -57,14 +57,38 @@ pub(crate) struct Shape {
     pub properties: Vec<(String, Target, Cardinality)>,
 }
 
-/// A shape document: the [`Schema`] it describes, and the shapes themselves, which
-/// [`crate::Typing::Validate`] validates a graph against.
+/// A shape document: the [`Schema`] it describes, the shapes themselves, which
+/// [`crate::Typing::Validate`] validates a graph against, and the document as it was read, which
+/// [`crate::write()`] saves beside the graph.
 #[derive(Debug)]
 pub struct Shapes {
     schema: Schema,
-    /// The shape of each vertex type, by its IRI, in the schema's order.
-    pub(crate) shapes: Vec<String>,
     pub(crate) document: Document,
+    syntax: Syntax,
+    text: String,
+}
+
+/// The syntax a shape document is written in, and the file [`crate::write()`] saves it as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Syntax {
+    /// A SHACL shapes graph in Turtle: [`crate::SHACL_FILE`].
+    ShaclTurtle,
+    /// A ShEx schema in ShExC, the compact syntax: [`crate::SHEXC_FILE`].
+    ShExC,
+    /// A ShEx schema in ShExJ, the JSON-LD form: [`crate::SHEXJ_FILE`].
+    ShExJ,
+}
+
+impl Syntax {
+    /// The name of the file the document is saved as beside the graph.
+    #[must_use]
+    pub fn file(self) -> &'static str {
+        match self {
+            Self::ShaclTurtle => crate::SHACL_FILE,
+            Self::ShExC => crate::SHEXC_FILE,
+            Self::ShExJ => crate::SHEXJ_FILE,
+        }
+    }
 }
 
 impl Shapes {
@@ -77,23 +101,43 @@ impl Shapes {
     /// The IRI of the shape a vertex type is, by its label.
     #[must_use]
     pub fn shape(&self, label: &str) -> Option<&str> {
-        let v = self.schema.vertices.iter().position(|v| v.label == label)?;
-        Some(&self.shapes[v])
+        self.schema.vertex(label)?.shape.as_deref()
+    }
+
+    /// The syntax the document is written in.
+    #[must_use]
+    pub fn syntax(&self) -> Syntax {
+        self.syntax
+    }
+
+    /// The document, exactly as it was read.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The shape of each vertex type, in the schema's order: every type of these shapes has one.
+    pub(crate) fn ids(&self) -> Vec<String> {
+        self.schema
+            .vertices
+            .iter()
+            .map(|v| v.shape.clone().expect("a type read from a shape"))
+            .collect()
     }
 }
 
 /// The shapes of a document, read off it.
-pub(crate) fn read(shapes: &[Shape], document: Document) -> Shapes {
-    let (schema, ids) = schema(shapes);
+pub(crate) fn read(shapes: &[Shape], document: Document, syntax: Syntax, text: &str) -> Shapes {
     Shapes {
-        schema,
-        shapes: ids,
+        schema: schema(shapes),
         document,
+        syntax,
+        text: text.to_owned(),
     }
 }
 
-/// The schema of `shapes`, in the order the module comment gives, and the shape of each type.
-fn schema(shapes: &[Shape]) -> (Schema, Vec<String>) {
+/// The schema of `shapes`, in the order the module comment gives, each type with its shape.
+fn schema(shapes: &[Shape]) -> Schema {
     let mut typed: Vec<&Shape> = shapes.iter().filter(|s| !s.id.starts_with("_:")).collect();
     typed.sort_by(|a, b| a.id.cmp(&b.id));
     typed.dedup_by(|a, b| a.id == b.id);
@@ -142,10 +186,11 @@ fn schema(shapes: &[Shape]) -> (Schema, Vec<String>) {
         schema.vertices.push(VertexType {
             label: label_of[i].clone(),
             class: shape.class.clone(),
+            shape: Some(shape.id.clone()),
             columns,
         });
     }
-    (schema, typed.iter().map(|s| s.id.clone()).collect())
+    schema
 }
 
 /// A property shape whose maximum is 0 (SHACL `sh:maxCount 0`, ShEx `{0,0}`): it forbids the

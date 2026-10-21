@@ -59,9 +59,10 @@ pub(crate) fn validate(
             .collect(),
         reasons: BTreeMap::new(),
     };
+    let ids = shapes.ids();
     let failed = match &shapes.document {
-        Document::Shacl(ir) => shacl(ir, &store, &shapes.shapes, subjects)?,
-        Document::ShEx(ir) => shex(ir, Data(store), &shapes.shapes, subjects)?,
+        Document::Shacl(ir) => shacl(ir, &store, &ids, subjects)?,
+        Document::ShEx(ir) => shex(ir, Data(store), &ids, subjects)?,
     };
     for (v, failures) in failed.into_iter().enumerate() {
         for s in subjects {
@@ -71,7 +72,7 @@ pub(crate) fn validate(
                     .reasons
                     .entry((*s).to_owned())
                     .or_default()
-                    .push(format!("{}: {reason}", shapes.shapes[v])),
+                    .push(format!("{}: {reason}", ids[v])),
             }
         }
     }

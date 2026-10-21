@@ -367,3 +367,117 @@ fn a_property_the_shape_forbids_is_refused() {
         );
     }
 }
+
+/// The files under `root`, by name, with their bytes.
+fn files(store: &InMemory, root: &str) -> HashMap<String, Vec<u8>> {
+    let listed: Vec<_> = block_on(futures::TryStreamExt::try_collect::<Vec<_>>(
+        store.list(Some(&Path::from(root))),
+    ))
+    .expect("a listing");
+    listed
+        .into_iter()
+        .map(|meta| {
+            let bytes = block_on(async {
+                object_store::ObjectStoreExt::get(store, &meta.location)
+                    .await?
+                    .bytes()
+                    .await
+            })
+            .expect("the bytes");
+            let name = meta.location.as_ref()[root.len() + 1..].to_owned();
+            (name, bytes.to_vec())
+        })
+        .collect()
+}
+
+#[test]
+fn the_shape_document_is_saved_as_it_was_read_and_only_when_validated() {
+    let shacl = data("people.shacl.ttl");
+    let shexc = data("people.shex");
+    let shexj = data("people.shex.json");
+    let by_class = ShapeMap::ByClass;
+    let documents = [
+        (
+            shapes::shacl::from_turtle(&shacl).expect("SHACL"),
+            &shacl,
+            graphar_rdf::SHACL_FILE,
+        ),
+        (
+            shapes::shex::from_compact(&shexc).expect("ShExC"),
+            &shexc,
+            graphar_rdf::SHEXC_FILE,
+        ),
+        (
+            shapes::shex::from_json(&shexj).expect("ShExJ"),
+            &shexj,
+            graphar_rdf::SHEXJ_FILE,
+        ),
+    ];
+    let all = [
+        graphar_rdf::SHACL_FILE,
+        graphar_rdf::SHEXC_FILE,
+        graphar_rdf::SHEXJ_FILE,
+    ];
+    for (shapes, text, file) in &documents {
+        assert_eq!(shapes.syntax().file(), *file);
+        let store = InMemory::new();
+        let written = block_on(write(
+            &store,
+            &Path::from("g"),
+            &Typing::Validate(shapes),
+            people(),
+            &Options::default(),
+        ))
+        .expect("written");
+        let files = files(&store, "g");
+        assert_eq!(
+            files.get(*file).map(Vec::as_slice),
+            Some(text.as_bytes()),
+            "{file}"
+        );
+        assert!(
+            all.iter()
+                .filter(|f| *f != file)
+                .all(|f| !files.contains_key(*f))
+        );
+        assert_eq!(
+            written.info.extra_info,
+            [(graphar_rdf::SHAPES_KEY.to_owned(), (*file).to_owned())]
+        );
+        let graph = String::from_utf8(files["graph.graph.yml"].clone()).expect("UTF-8");
+        assert!(graph.contains(file), "{graph}");
+        // Each type's triples map says the shape its subjects conform to.
+        let mapping = String::from_utf8(files[graphar_rdf::MAPPING_FILE].clone()).expect("UTF-8");
+        for shape in ["Person", "Organization"] {
+            assert!(
+                mapping.contains(&format!(
+                    "<#{shape}> a rml:TriplesMap ;\n  rml:logicalSource [ rml:source [ a rml:Source ] ; rml:referenceFormulation rml:SQL2008Table ; rml:iterator \"\\\"{shape}\\\"\" ] ;"
+                )),
+                "{mapping}"
+            );
+            assert!(
+                mapping.contains(&format!(
+                    "dct:conformsTo <https://example.org/shapes/{shape}>"
+                )),
+                "{mapping}"
+            );
+        }
+    }
+    let store = InMemory::new();
+    let written = block_on(write(
+        &store,
+        &Path::from("g"),
+        &Typing::Assume(documents[0].0.schema(), &by_class),
+        people(),
+        &Options::default(),
+    ))
+    .expect("written");
+    let files = files(&store, "g");
+    assert!(
+        all.iter().all(|f| !files.contains_key(*f)),
+        "{:?}",
+        files.keys()
+    );
+    assert!(written.info.extra_info.is_empty());
+    assert!(files.contains_key(graphar_rdf::MAPPING_FILE));
+}

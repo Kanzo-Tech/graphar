@@ -23,6 +23,7 @@ fn schema() -> Schema {
             VertexType {
                 label: "Order".to_owned(),
                 class: Some("https://example.org/Order".to_owned()),
+                shape: None,
                 columns: vec![
                     column(
                         "placedOn",
@@ -41,6 +42,7 @@ fn schema() -> Schema {
             VertexType {
                 label: "Customer".to_owned(),
                 class: Some("https://example.org/Customer".to_owned()),
+                shape: None,
                 columns: vec![],
             },
         ],
@@ -50,7 +52,6 @@ fn schema() -> Schema {
             destination: "Customer".to_owned(),
             predicate: "https://example.org/placedBy".to_owned(),
         }],
-        annotations: vec![],
     }
 }
 
@@ -162,7 +163,7 @@ fn rml_and_r2rml_are_one_plan_and_r2rml_has_a_map_per_language() {
     assert!(algebra.starts_with("∪("));
 
     let languages = [(
-        "Order_labels".to_owned(),
+        "Order/labels".to_owned(),
         ["en", "es"].map(String::from).into(),
     )]
     .into();
@@ -182,6 +183,61 @@ fn rml_and_r2rml_are_one_plan_and_r2rml_has_a_map_per_language() {
     assert!(language("en") && language("es"));
     assert!(r2rml.contains("WHERE q.\\\"lang\\\" = 'es'"), "{r2rml}");
     // `note` holds no language here, so it has no triples map: it would read nothing.
-    assert!(!r2rml.contains("Order_note"));
+    assert!(!r2rml.contains("Order/note"));
     assert!(!r2rml.contains("languageMap"));
+}
+
+#[test]
+fn a_triples_map_is_named_by_the_graphar_names_it_reads_and_says_its_shape() {
+    let mut s = schema();
+    s.vertices[1].shape = Some("https://example.org/shapes/Customer".to_owned());
+    let text = mapping(&s).expect("a mapping");
+    let triples: Vec<_> = TurtleParser::new()
+        .with_base_iri("http://example.org/mapping.ttl")
+        .expect("a base")
+        .for_slice(text.as_bytes())
+        .collect::<Result<_, _>>()
+        .expect("Turtle");
+    let maps: Vec<&str> = triples
+        .iter()
+        .filter(|t| matches!(&t.object, Term::NamedNode(n) if n.as_str() == "http://w3id.org/rml/TriplesMap"))
+        .map(|t| match &t.subject {
+            oxrdf::NamedOrBlankNode::NamedNode(n) => n.as_str(),
+            other => panic!("{other}"),
+        })
+        .collect();
+    let base = "http://example.org/mapping.ttl#";
+    assert_eq!(
+        maps,
+        [
+            "Order",
+            "Order/labels",
+            "Order/note",
+            "Customer",
+            "Order_placedBy_Customer"
+        ]
+        .map(|m| format!("{base}{m}")),
+        "{text}"
+    );
+    let conforms: Vec<(String, String)> = triples
+        .iter()
+        .filter(|t| t.predicate.as_str() == graphar_rdf::DCT_CONFORMS_TO)
+        .map(|t| (t.subject.to_string(), t.object.to_string()))
+        .collect();
+    assert_eq!(
+        conforms,
+        [(
+            format!("<{base}Customer>"),
+            "<https://example.org/shapes/Customer>".to_owned()
+        )]
+    );
+    // A type with a shape has its map even with no class and no single-valued column.
+    s.vertices[1].class = None;
+    assert!(
+        mapping(&s)
+            .expect("a mapping")
+            .contains("<#Customer> a rml:TriplesMap")
+    );
+    s.vertices[1].shape = None;
+    assert!(!mapping(&s).expect("a mapping").contains("<#Customer>"));
 }
