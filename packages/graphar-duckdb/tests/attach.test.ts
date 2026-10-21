@@ -36,11 +36,14 @@ describe('attachGraph over the sample', async () => {
   const e = await engine();
   const g = await attachGraph(e, 'g', under(SAMPLE), { entry });
 
-  it('parses the information files', () => {
-    expect(g.graph.name).toBe('sample');
-    expect(g.graph.prefix).toBeUndefined();
-    expect(g.graph.vertices.map((v) => v.type)).toEqual(['person', 'software', 'nickname']);
-    expect(g.graph.edges[0]!.adj_lists.map((a) => a.type)).toEqual(['ordered_by_source', 'unordered_by_dest']);
+  it('describes the types in the order of the graph document', () => {
+    expect(g.vertexTypes.map((v) => [v.type, v.count, v.table])).toEqual([
+      ['person', 7, '"g"."person"'], ['software', 3, '"g"."software"'], ['nickname', 3, '"g"."nickname"'],
+    ]);
+    expect(g.edgeTypes.map((t) => [t.name, t.srcType, t.edgeType, t.dstType, t.count, t.directed])).toEqual([
+      ['person_knows_person', 'person', 'knows', 'person', 8, true],
+      ['person_created_software', 'person', 'created', 'software', 4, true],
+    ]);
   });
 
   it('views a vertex type with its groups joined on the internal id', async () => {
@@ -174,7 +177,8 @@ describe('attachGraph', () => {
     expect(asked[0]).toEqual([entry]);
     expect(asked[1]).toContain('person_knows_person.edge.yml');
     expect(asked.flat().every((p) => !p.startsWith('/') && !p.startsWith('.'))).toBe(true);
-    expect(e.statements.filter((s) => s.startsWith('SELECT')).length).toBe(5);
+    // The five files; then, once the views exist, their columns' types and the statistics.
+    expect(e.statements.filter((s) => s.startsWith('SELECT')).length).toBe(7);
   });
 
   it('keeps a catalog two attachments share until the last detaches', async () => {
@@ -192,7 +196,7 @@ describe('attachGraph', () => {
     const parent = resolvePath(SAMPLE, '..');
     await using g = await attachGraph(e, 'sub', under(parent), { entry: 'sample/sample.graph.yml' });
     expect(await e.rows(`SELECT count(*)::INTEGER AS n FROM "sub"."person_knows_person"`)).toEqual([{ n: 8 }]);
-    expect(g.graph.vertices).toHaveLength(3);
+    expect(g.vertexTypes).toHaveLength(3);
   });
 
   it('views an empty type with its columns typed', async () => {
@@ -270,7 +274,9 @@ describe('attachGraph over user_defined: a list of a user-defined type', () => {
   it('reads the column as a DuckDB LIST of STRUCT, and says its type in GraphAr\'s words', async () => {
     const e = await engine();
     await using g = await attachGraph(e, 'u', under(USER_DEFINED), { entry: user });
-    expect(g.graph.version).toBe('gar/v1 (langString)');
+    expect(g.vertexTypes[0]!.properties.find((p) => p.name === 'labels')).toEqual({
+      name: 'labels', type: 'STRUCT("value" VARCHAR, lang VARCHAR)[]', primary: false, nullable: true, list: true,
+    });
     const types = await e.rows(`SELECT column_name, column_type FROM (DESCRIBE "u"."concept")`);
     expect(types).toEqual([
       { column_name: '_graphArVertexIndex', column_type: 'BIGINT' },

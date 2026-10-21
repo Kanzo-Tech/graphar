@@ -4,6 +4,7 @@
  */
 
 import { GraphArError } from './error.js';
+import { type Graph, type Property as GraphProperty, type Stats, graphOf } from './graph.js';
 import {
   type AdjacentList,
   type EdgeInfo,
@@ -54,21 +55,6 @@ export interface AttachOptions {
    * this is needed only to type a view that has no chunk to read: a type with no rows.
    */
   readonly userTypes?: Readonly<Record<string, string>>;
-}
-
-/** A graph attached by {@link attachGraph}. */
-export interface GraphAttachment {
-  /** The catalog: `"<catalog>"."person"`. */
-  readonly catalog: string;
-  /** The information files, parsed. */
-  readonly graph: GraphInfo;
-  /**
-   * Detaches the catalog, once no other attachment of the same name on the engine holds it. A
-   * second call does nothing.
-   */
-  detach(): Promise<void>;
-  /** {@link GraphAttachment.detach}, for `await using`. */
-  [Symbol.asyncDispose](): Promise<void>;
 }
 
 /** GraphAr's reserved columns: C++ `GeneralParams` (`general_params.h`). */
@@ -137,11 +123,13 @@ const COUNT = `CASE WHEN octet_length(content) = 8
 /**
  * **Attach a GraphAr graph to the engine as the catalog `catalog`**: a view per vertex type,
  * `"<catalog>"."<type>"`, and per edge type, `"<catalog>"."<src_type>_<edge_type>_<dst_type>"`,
- * with GraphAr's own columns, and the information files as five relations and the chunks' statistics as a sixth.
+ * with GraphAr's own columns, and the information files as five relations and the chunks' statistics as a sixth;
+ * and answer the {@link Graph} over them, which is what a consumer reads: it names every relation
+ * and column a query needs, so a consumer writes none of the format's.
  *
  * ```ts
  * await using g = await attachGraph(engine, 'job', (paths) => paths.map((p) => `${url}/${p}`), { entry: 'fossil.graph.yml' });
- * await engine.query(`SELECT _graphArVertexIndex, name FROM "job"."person"`, { signal });
+ * const { sql } = g.match([{ as: 'p', type: 'person' }, { edge: 'created' }, { as: 's', type: 'software' }], { columns: ['p.name', 's.name'] });
  * ```
  *
  * Every file is read through the engine: the YAML with `read_text`, the count files with
@@ -192,7 +180,7 @@ export async function attachGraph(
   catalog: string,
   resolve: Resolve,
   options: AttachOptions,
-): Promise<GraphAttachment> {
+): Promise<Graph> {
   const { entry, signal } = options;
   const userTypes = options.userTypes ?? {};
   const quiet = new AbortController().signal;
@@ -468,5 +456,70 @@ export async function attachGraph(
     detached = true;
     await release();
   };
-  return { catalog, graph, detach, [Symbol.asyncDispose]: detach };
+
+  // What the consumer reads: each column's DuckDB type as the engine typed the view, and each
+  // property's statistics from the relation above.
+  let columns: Table;
+  let stats: Table;
+  try {
+    columns = await run(
+      `SELECT table_name AS r, column_name AS c, data_type AS t FROM information_schema.columns WHERE table_catalog = ${lit(catalog)}`,
+      (cause) => new GraphArError('engine', `the columns of ${catalog} did not read`, { cause }),
+    );
+    stats = await run(`SELECT * FROM ${ident(catalog)}.graphar_column_stats`, (cause) =>
+      new GraphArError('engine', `the statistics of ${catalog} did not read`, { cause }));
+  } catch (cause) {
+    await detach().catch(() => {});
+    throw cause;
+  }
+  const cell = (t: Table, row: number, c: string) => t.getChild(c)?.get(row);
+  const typeOf = new Map<string, string>();
+  for (let row = 0; row < columns.numRows; row++) {
+    typeOf.set(`${cell(columns, row, 'r')}\0${cell(columns, row, 'c')}`, String(cell(columns, row, 't')));
+  }
+  const statsOf = new Map<string, Stats>();
+  for (let row = 0; row < stats.numRows; row++) {
+    const count = (c: string) => {
+      const v = cell(stats, row, c);
+      return v === null || v === undefined ? undefined : Number(v);
+    };
+    const text = (c: string) => {
+      const v = cell(stats, row, c);
+      return v === null || v === undefined ? undefined : String(v);
+    };
+    const [lo, hi] = [count('distinct_min'), count('distinct_max')];
+    statsOf.set(`${cell(stats, row, 'type')}\0${cell(stats, row, 'property')}`, {
+      ...(count('null_count') === undefined ? {} : { nulls: count('null_count')! }),
+      ...(text('min') === undefined ? {} : { min: text('min')! }),
+      ...(text('max') === undefined ? {} : { max: text('max')! }),
+      ...(lo === undefined || hi === undefined ? {} : { distinct: lo === hi ? { exact: lo } : { atLeast: lo, atMost: hi } }),
+    });
+  }
+  const propertiesOf = (relation: string, groups: readonly PropertyGroup[]): GraphProperty[] =>
+    groups.flatMap((g) => g.properties).map((p) => {
+      const s = statsOf.get(`${relation}\0${p.name}`);
+      return {
+        name: p.name,
+        type: typeOf.get(`${relation}\0${p.name}`) ?? propertyType(p, `\`${relation}\``, userTypes),
+        primary: p.is_primary,
+        nullable: p.is_nullable,
+        list: p.cardinality !== 'single',
+        ...(s === undefined ? {} : { stats: s }),
+      };
+    });
+  const table = (name: string) => `${ident(catalog)}.${ident(name)}`;
+  return graphOf({
+    engine,
+    vertexTypes: vertices.map((v, i) => ({
+      type: v.type, count: vertexCounts[i]!, table: table(v.type), index: VERTEX_INDEX_COL,
+      properties: propertiesOf(v.type, v.property_groups),
+    })),
+    edgeTypes: edges.map((e, i) => ({
+      name: edgeName(e), edgeType: e.edge_type, srcType: e.src_type, dstType: e.dst_type,
+      count: partCounts[i]!.reduce((a, b) => a + b, 0), directed: e.directed,
+      table: table(edgeName(e)), src: SRC_INDEX_COL, dst: DST_INDEX_COL,
+      properties: propertiesOf(edgeName(e), e.property_groups),
+    })),
+    detach,
+  });
 }
