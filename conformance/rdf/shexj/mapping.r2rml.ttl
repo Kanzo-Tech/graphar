@@ -1,0 +1,76 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+
+<#Organization> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "\"Organization\"" ] ;
+  rr:subjectMap [ rr:column "subject" ; rr:termType rr:IRI ; rr:class <https://example.org/Organization> ] ;
+  dct:conformsTo <https://example.org/shapes/Organization> ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/founded> ;
+      rr:objectMap [ rr:column "founded" ; rr:datatype xsd:int ] ] .
+
+<#Organization/name/en> a rr:TriplesMap ;
+  rr:logicalTable [ rr:sqlQuery "SELECT * FROM (SELECT \"subject\", (\"name\").\"value\" AS \"value\", (\"name\").\"lang\" AS \"lang\" FROM \"Organization\") AS q WHERE q.\"lang\" = 'en'" ;
+      rr:sqlVersion rr:SQL2008 ] ;
+  rr:subjectMap [ rr:column "subject" ; rr:termType rr:IRI ] ;
+  rr:predicateObjectMap [ rr:predicate <https://schema.org/name> ;
+      rr:objectMap [ rr:column "value" ; rr:language "en" ] ] .
+
+<#Person> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "\"Person\"" ] ;
+  rr:subjectMap [ rr:column "subject" ; rr:termType rr:IRI ; rr:class <https://example.org/Person> ] ;
+  dct:conformsTo <https://example.org/shapes/Person> ;
+  rr:predicateObjectMap [ rr:predicate <http://xmlns.com/foaf/0.1/name> ;
+      rr:objectMap [ rr:column "name" ] ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/active> ;
+      rr:objectMap [ rr:column "active" ; rr:datatype xsd:boolean ] ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/age> ;
+      rr:objectMap [ rr:column "age" ; rr:datatype xsd:integer ] ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/born> ;
+      rr:objectMap [ rr:column "born" ; rr:datatype xsd:date ] ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/homepage> ;
+      rr:objectMap [ rr:column "homepage" ; rr:termType rr:IRI ] ] ;
+  rr:predicateObjectMap [ rr:predicate <https://schema.org/name> ;
+      rr:objectMap [ rr:column "name_2" ] ] .
+
+<#Person/motto/en> a rr:TriplesMap ;
+  rr:logicalTable [ rr:sqlQuery "SELECT * FROM (SELECT \"subject\", (\"motto\").\"value\" AS \"value\", (\"motto\").\"lang\" AS \"lang\" FROM \"Person\") AS q WHERE q.\"lang\" = 'en'" ;
+      rr:sqlVersion rr:SQL2008 ] ;
+  rr:subjectMap [ rr:column "subject" ; rr:termType rr:IRI ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/motto> ;
+      rr:objectMap [ rr:column "value" ; rr:language "en" ] ] .
+
+<#Person/nick/en> a rr:TriplesMap ;
+  rr:logicalTable [ rr:sqlQuery "SELECT * FROM (SELECT t.\"subject\", (t.n).\"value\" AS \"value\", (t.n).\"lang\" AS \"lang\" FROM (SELECT \"subject\", unnest(\"nick\") AS n FROM \"Person\") AS t) AS q WHERE q.\"lang\" = 'en'" ;
+      rr:sqlVersion rr:SQL2008 ] ;
+  rr:subjectMap [ rr:column "subject" ; rr:termType rr:IRI ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/nick> ;
+      rr:objectMap [ rr:column "value" ; rr:language "en" ] ] .
+
+<#Person/nick/es> a rr:TriplesMap ;
+  rr:logicalTable [ rr:sqlQuery "SELECT * FROM (SELECT t.\"subject\", (t.n).\"value\" AS \"value\", (t.n).\"lang\" AS \"lang\" FROM (SELECT \"subject\", unnest(\"nick\") AS n FROM \"Person\") AS t) AS q WHERE q.\"lang\" = 'es'" ;
+      rr:sqlVersion rr:SQL2008 ] ;
+  rr:subjectMap [ rr:column "subject" ; rr:termType rr:IRI ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/nick> ;
+      rr:objectMap [ rr:column "value" ; rr:language "es" ] ] .
+
+<#Person/tag> a rr:TriplesMap ;
+  rr:logicalTable [ rr:sqlQuery "SELECT \"subject\", unnest(\"tag\") AS \"value\" FROM \"Person\"" ;
+      rr:sqlVersion rr:SQL2008 ] ;
+  rr:subjectMap [ rr:column "subject" ; rr:termType rr:IRI ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/tag> ;
+      rr:objectMap [ rr:column "value" ] ] .
+
+<#Person_knows_Person> a rr:TriplesMap ;
+  rr:logicalTable [ rr:sqlQuery "SELECT s.\"subject\" AS \"source\", d.\"subject\" AS \"target\" FROM \"Person_knows_Person\" AS e JOIN \"Person\" AS s ON e.\"_graphArSrcIndex\" = s.\"_graphArVertexIndex\" JOIN \"Person\" AS d ON e.\"_graphArDstIndex\" = d.\"_graphArVertexIndex\"" ;
+      rr:sqlVersion rr:SQL2008 ] ;
+  rr:subjectMap [ rr:column "source" ; rr:termType rr:IRI ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/knows> ;
+      rr:objectMap [ rr:column "target" ; rr:termType rr:IRI ] ] .
+
+<#Person_worksFor_Organization> a rr:TriplesMap ;
+  rr:logicalTable [ rr:sqlQuery "SELECT s.\"subject\" AS \"source\", d.\"subject\" AS \"target\" FROM \"Person_worksFor_Organization\" AS e JOIN \"Person\" AS s ON e.\"_graphArSrcIndex\" = s.\"_graphArVertexIndex\" JOIN \"Organization\" AS d ON e.\"_graphArDstIndex\" = d.\"_graphArVertexIndex\"" ;
+      rr:sqlVersion rr:SQL2008 ] ;
+  rr:subjectMap [ rr:column "source" ; rr:termType rr:IRI ] ;
+  rr:predicateObjectMap [ rr:predicate <https://example.org/worksFor> ;
+      rr:objectMap [ rr:column "target" ; rr:termType rr:IRI ] ] .

@@ -68,9 +68,9 @@ const METADATA = ['graphar_vertex_types', 'graphar_edge_types', 'graphar_propert
 const holders = new WeakMap<Engine, Map<string, number>>();
 
 /** A single-quoted SQL string literal. */
-const lit = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+export const lit = (value: string): string => `'${value.replace(/'/g, "''")}'`;
 /** A quoted SQL identifier. */
-const ident = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+export const ident = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 const list = (values: readonly string[]): string => `[${values.map(lit).join(', ')}]`;
 
 /** Prefixes joined as C++'s `BuildPath` joins them: as written, a slash added where one is missing. */
@@ -86,15 +86,18 @@ const offsetChunk = (e: EdgeInfo, a: AdjacentList, p: number) => `${dir(e.prefix
 const edgeCount = (e: EdgeInfo, a: AdjacentList, p: number) => `${dir(e.prefix, a.prefix)}edge_count${p}`;
 const edgeVertexCount = (e: EdgeInfo, a: AdjacentList) => `${dir(e.prefix, a.prefix)}vertex_count`;
 
+/** GraphAr's own data types, as DuckDB's. */
+const GRAPHAR_TYPES: Readonly<Record<string, string>> = {
+  bool: 'BOOLEAN', int32: 'INTEGER', int64: 'BIGINT', float: 'FLOAT', double: 'DOUBLE', string: 'VARCHAR',
+  date: 'DATE', timestamp: 'TIMESTAMP', time: 'TIME',
+};
+
 /** GraphAr's type as DuckDB's, for a relation with no file to read its type from. */
 function duckType(dataType: string, at: string, userTypes: Readonly<Record<string, string>>): string {
   const list = /^list<(.+)>$/.exec(dataType);
   if (list) return `${duckType(list[1]!, at, userTypes)}[]`;
   if (Object.hasOwn(userTypes, dataType)) return userTypes[dataType]!;
-  const t = ({
-    bool: 'BOOLEAN', int32: 'INTEGER', int64: 'BIGINT', float: 'FLOAT', double: 'DOUBLE', string: 'VARCHAR',
-    date: 'DATE', timestamp: 'TIMESTAMP', time: 'TIME',
-  } as Record<string, string>)[dataType];
+  const t = Object.hasOwn(GRAPHAR_TYPES, dataType) ? GRAPHAR_TYPES[dataType] : undefined;
   if (t === undefined) {
     throw new GraphArError('unsupported', `${at}: data type \`${dataType}\` has no DuckDB type: GraphAr defines none, and \`userTypes\` gives none`);
   }
@@ -119,6 +122,61 @@ function relationOf(columns: readonly (readonly [string, string])[], rows: reado
 /** One count file as an `int64` in SQL, or `NULL` when it is not 8 bytes: little-endian, so reversed into hex. */
 const COUNT = `CASE WHEN octet_length(content) = 8
   THEN ('0x' || array_to_string(list_reverse(regexp_extract_all(hex(content), '..')), ''))::UBIGINT END`;
+
+/** What reads the graph's files through the engine, by the names `resolve` gives them. */
+export interface Reader {
+  /** One statement; a refusal becomes `fail(cause)`, an abort rejects with the signal's reason. */
+  run(sql: string, fail: (cause: unknown) => GraphArError, signal?: AbortSignal): Promise<Table>;
+  /** The names `resolve` gives `paths`, as many as there are paths. */
+  names(paths: readonly string[]): Promise<readonly string[]>;
+  /** Each file's text, read with `read_text`; a file that does not read is `unreadable`. */
+  texts(paths: readonly string[]): Promise<string[]>;
+  /** Each count file's `int64`, read with `read_blob`. */
+  counts(paths: readonly string[]): Promise<number[]>;
+}
+
+/** The {@link Reader} over `engine` and `resolve`, stopped by `signal`. */
+export function reader(engine: Engine, resolve: Resolve, signal: AbortSignal | undefined): Reader {
+  const quiet = new AbortController().signal;
+  const run = async (sql: string, fail: (cause: unknown) => GraphArError, s: AbortSignal | undefined = signal): Promise<Table> => {
+    s?.throwIfAborted();
+    try {
+      return await engine.query(sql, { signal: s ?? quiet });
+    } catch (cause) {
+      s?.throwIfAborted();
+      throw fail(cause);
+    }
+  };
+  const names = async (paths: readonly string[]): Promise<readonly string[]> => {
+    const named = await resolve(paths);
+    if (named.length !== paths.length) throw new TypeError(`resolve answered ${named.length} names for ${paths.length} paths`);
+    return named;
+  };
+  /** Each file through `fn` in one statement, by the name it was resolved to. */
+  const read = async (paths: readonly string[], fn: string, column: string): Promise<unknown[]> => {
+    if (paths.length === 0) return [];
+    const named = await names(paths);
+    const unreadable = (at: string, cause?: unknown) =>
+      new GraphArError('unreadable', `${at}: did not read`, cause === undefined ? { document: at } : { document: at, cause });
+    const answer = await run(`SELECT filename, ${column} AS v FROM ${fn}(${list(named)})`, (cause) => unreadable(paths.join(', '), cause));
+    const byName = new Map<string, unknown>();
+    const files = answer.getChild('filename');
+    const values = answer.getChild('v');
+    for (let i = 0; i < answer.numRows; i++) byName.set(String(files?.get(i)), values?.get(i));
+    return named.map((n, i) => {
+      if (!byName.has(n)) throw unreadable(paths[i]!);
+      return byName.get(n);
+    });
+  };
+  const texts = async (paths: readonly string[]): Promise<string[]> => (await read(paths, 'read_text', 'content')).map(String);
+  const counts = async (paths: readonly string[]): Promise<number[]> =>
+    (await read(paths, 'read_blob', COUNT)).map((v, i) => {
+      const n = v === null || v === undefined ? NaN : Number(v);
+      if (!Number.isSafeInteger(n)) throw new GraphArError('invalid', `${paths[i]}: not a count, one int64`, { document: paths[i]! });
+      return n;
+    });
+  return { run, names, texts, counts };
+}
 
 /**
  * **Attach a GraphAr graph to the engine as the catalog `catalog`**: a view per vertex type,
@@ -183,44 +241,7 @@ export async function attachGraph(
 ): Promise<Graph> {
   const { entry, signal } = options;
   const userTypes = options.userTypes ?? {};
-  const quiet = new AbortController().signal;
-  const run = async (sql: string, fail: (cause: unknown) => GraphArError, s: AbortSignal | undefined = signal): Promise<Table> => {
-    s?.throwIfAborted();
-    try {
-      return await engine.query(sql, { signal: s ?? quiet });
-    } catch (cause) {
-      s?.throwIfAborted();
-      throw fail(cause);
-    }
-  };
-  const names = async (paths: readonly string[]): Promise<readonly string[]> => {
-    const named = await resolve(paths);
-    if (named.length !== paths.length) throw new TypeError(`resolve answered ${named.length} names for ${paths.length} paths`);
-    return named;
-  };
-  /** Each file through `fn` in one statement, by the name it was resolved to. */
-  const read = async (paths: readonly string[], fn: string, column: string): Promise<unknown[]> => {
-    if (paths.length === 0) return [];
-    const named = await names(paths);
-    const unreadable = (at: string, cause?: unknown) =>
-      new GraphArError('unreadable', `${at}: did not read`, cause === undefined ? { document: at } : { document: at, cause });
-    const answer = await run(`SELECT filename, ${column} AS v FROM ${fn}(${list(named)})`, (cause) => unreadable(paths.join(', '), cause));
-    const byName = new Map<string, unknown>();
-    const files = answer.getChild('filename');
-    const values = answer.getChild('v');
-    for (let i = 0; i < answer.numRows; i++) byName.set(String(files?.get(i)), values?.get(i));
-    return named.map((n, i) => {
-      if (!byName.has(n)) throw unreadable(paths[i]!);
-      return byName.get(n);
-    });
-  };
-  const texts = async (paths: readonly string[]): Promise<string[]> => (await read(paths, 'read_text', 'content')).map(String);
-  const counts = async (paths: readonly string[]): Promise<number[]> =>
-    (await read(paths, 'read_blob', COUNT)).map((v, i) => {
-      const n = v === null || v === undefined ? NaN : Number(v);
-      if (!Number.isSafeInteger(n)) throw new GraphArError('invalid', `${paths[i]}: not a count, one int64`, { document: paths[i]! });
-      return n;
-    });
+  const { run, names, texts, counts } = reader(engine, resolve, signal);
 
   // The information files.
   const base = entry.slice(0, entry.lastIndexOf('/') + 1);
@@ -377,9 +398,9 @@ export async function attachGraph(
   ].flatMap(([type, groups, perGroup]) =>
     groups.flatMap((g, n) =>
       g.properties
-        .filter((p) => p.cardinality === 'single' && !Object.hasOwn(userTypes, p.data_type) && perGroup[n]!.length > 0)
+        .filter((p) => p.cardinality === 'single' && Object.hasOwn(GRAPHAR_TYPES, p.data_type) && perGroup[n]!.length > 0)
         .map((p) => {
-          const t = duckType(p.data_type, `\`${type}\`.\`${p.name}\``, userTypes);
+          const t = GRAPHAR_TYPES[p.data_type]!;
           const all = (c: string) => `count(*) = count(${c})`;
           return `SELECT ${lit(type)} AS type, ${lit(p.name)} AS property,
             CASE WHEN ${all('stats_null_count')} THEN sum(stats_null_count) END AS null_count,

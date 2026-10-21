@@ -1,0 +1,14 @@
+src_type: Person
+edge_type: worksFor
+dst_type: Organization
+chunk_size: 2
+src_chunk_size: 2
+dst_chunk_size: 2
+prefix: edge/Person_worksFor_Organization/
+directed: true
+adj_lists:
+  - ordered: true
+    aligned_by: src
+    prefix: ordered_by_source/
+    file_type: parquet
+version: gar/v1 (langString)

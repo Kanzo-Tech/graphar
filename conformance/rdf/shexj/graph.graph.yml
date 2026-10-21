@@ -1,0 +1,11 @@
+name: graph
+vertices:
+  - Organization.vertex.yml
+  - Person.vertex.yml
+edges:
+  - Person_knows_Person.edge.yml
+  - Person_worksFor_Organization.edge.yml
+version: gar/v1 (langString)
+extra_info:
+  - key: shapes
+    value: shapes.shexj

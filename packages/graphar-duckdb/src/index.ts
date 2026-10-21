@@ -15,3 +15,14 @@ export type {
   VertexPattern,
   VertexType,
 } from './graph.js';
+export {
+  attachRdfGraph,
+  MAPPING_FILE,
+  SHAPES_KEY,
+  type Labelled,
+  type RdfEdgeType,
+  type RdfGraph,
+  type RdfProperty,
+  type RdfVertexType,
+  type Shapes,
+} from './rdf.js';

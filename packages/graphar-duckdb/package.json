@@ -1,14 +1,14 @@
 {
   "name": "@kanzo-tech/graphar-duckdb",
   "version": "0.1.0-alpha.1",
-  "description": "An Apache GraphAr graph attached to a DuckDB engine and read as a Graph: its types, properties and their Parquet statistics, a vertex, the edges of a type or at a vertex, search, and patterns across types as SQL, over a view per vertex and edge type. TypeScript only: no WASM, no engine of its own.",
+  "description": "An Apache GraphAr graph attached to a DuckDB engine and read as a Graph: its types, properties and their Parquet statistics, a vertex, the edges of a type or at a vertex, search, and patterns across types as SQL, over a view per vertex and edge type; and a graph graphar-rdf wrote read as an RdfGraph, its types and properties with their IRIs from the RML mapping and their labels from the shapes, and its triples evaluated on the engine. TypeScript only: no WASM, no engine of its own.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Kanzo-Tech/graphar.git",
     "directory": "packages/graphar-duckdb"
   },
-  "keywords": ["graphar", "graph", "property-graph", "duckdb", "parquet"],
+  "keywords": ["graphar", "graph", "property-graph", "duckdb", "parquet", "rdf", "rml"],
   "publishConfig": {
     "access": "public"
   },
@@ -29,10 +29,13 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "js-yaml": "5.4.2"
+    "@rdfjs/types": "2.0.1",
+    "js-yaml": "5.4.2",
+    "n3": "2.13.12"
   },
   "devDependencies": {
     "@duckdb/node-api": "1.5.5-r.5",
+    "@types/n3": "1.26.5",
     "@types/node": "^22.0.0",
     "typescript": "5.9.3",
     "vitest": "4.1.11"
