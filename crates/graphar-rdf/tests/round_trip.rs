@@ -1,11 +1,14 @@
 //! Statement R: the triples [`graphar_rdf::read`] reads from a written graph are the triples
-//! [`graphar_rdf::write`] was given, up to canonical lexical form; and a graph that does not
-//! conform is refused, with nothing written.
+//! [`graphar_rdf::write`] was given, up to canonical lexical form, whether the subjects are typed
+//! by validation or by a shape map the caller states; and a graph that does not conform is refused,
+//! with nothing written.
 
 use std::collections::BTreeSet;
 
 use futures::executor::block_on;
-use graphar_rdf::{Cardinality, Error, Object, Options, Schema, read, shapes, write};
+use std::collections::HashMap;
+
+use graphar_rdf::{Cardinality, Error, Object, Options, ShapeMap, Typing, read, shapes, write};
 use object_store::ObjectStore;
 use object_store::{memory::InMemory, path::Path};
 use oxrdf::Triple;
@@ -44,7 +47,7 @@ fn canonical() -> BTreeSet<String> {
         .collect()
 }
 
-fn round_trip(schema: &Schema, chunk_size: u64) -> (graphar_rdf::Written, BTreeSet<String>) {
+fn round_trip(typing: &Typing<'_>, chunk_size: u64) -> (graphar_rdf::Written, BTreeSet<String>) {
     let store = InMemory::new();
     let root = Path::from("people");
     let options = Options {
@@ -52,8 +55,9 @@ fn round_trip(schema: &Schema, chunk_size: u64) -> (graphar_rdf::Written, BTreeS
         chunk_size,
         ..Options::default()
     };
-    let written = block_on(write(&store, &root, schema, people(), &options)).expect("written");
-    let back = block_on(read(&store, &root, &written.info, schema)).expect("read");
+    let written = block_on(write(&store, &root, typing, people(), &options))
+        .unwrap_or_else(|e| panic!("written: {e}"));
+    let back = block_on(read(&store, &root, &written.info, typing.schema())).expect("read");
     let back_set = set(back.clone());
     assert_eq!(back.len(), back_set.len(), "no triple is read twice");
     (written, back_set)
@@ -64,10 +68,29 @@ fn shacl_and_shex_make_one_schema() {
     let shacl = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
     let shexj = shapes::shex::from_json(&data("people.shex.json")).expect("ShExJ");
     let shexc = shapes::shex::from_compact(&data("people.shex")).expect("ShExC");
+    let (shacl, shexj, shexc) = (shacl.schema(), shexj.schema(), shexc.schema());
     // ShEx `max` defaults to 1, SHACL's to unbounded: the documents say the same.
     assert_eq!(shacl, shexj);
     assert_eq!(shacl, shexc);
+    // A type is a shape, named by it; the class it fixes is no column.
+    assert_eq!(
+        shacl
+            .vertices
+            .iter()
+            .map(|v| (v.label.as_str(), v.class.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("Organization", Some("https://example.org/Organization")),
+            ("Person", Some("https://example.org/Person")),
+        ]
+    );
     let person = shacl.vertex("Person").expect("Person");
+    assert!(
+        person
+            .columns
+            .iter()
+            .all(|c| c.predicate != graphar_rdf::RDF_TYPE)
+    );
     let names: Vec<(&str, &Object, Cardinality)> = person
         .columns
         .iter()
@@ -97,79 +120,161 @@ fn shacl_and_shex_make_one_schema() {
 }
 
 #[test]
-fn every_triple_comes_back_at_every_chunk_size() {
-    let schema = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
+fn every_triple_comes_back_at_every_chunk_size_validated_or_assumed() {
+    let shacl = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
+    let shex = shapes::shex::from_compact(&data("people.shex")).expect("ShExC");
+    let nodes: HashMap<String, String> = ["alice", "bob", "carol", "dave"]
+        .map(|p| (format!("https://example.org/{p}"), "Person".to_owned()))
+        .into_iter()
+        .chain([(
+            "https://example.org/acme".to_owned(),
+            "Organization".to_owned(),
+        )])
+        .collect();
+    let (by_class, by_node) = (ShapeMap::ByClass, ShapeMap::Nodes(nodes));
     let given = canonical();
     assert_ne!(given, set(people()), "the data has non-canonical forms");
-    for chunk_size in [1, 2, 3, 1 << 20] {
-        let (written, back) = round_trip(&schema, chunk_size);
-        let missing: Vec<_> = given.difference(&back).collect();
-        let extra: Vec<_> = back.difference(&given).collect();
-        assert!(
-            missing.is_empty() && extra.is_empty(),
-            "chunk {chunk_size}: missing {missing:#?}, extra {extra:#?}"
-        );
-        assert_eq!(written.triples as usize, given.len());
-        assert_eq!(
-            written.vertices,
-            [("Organization".to_owned(), 1), ("Person".to_owned(), 4)]
-        );
-        // alice→bob, alice→carol, bob→alice, carol→dave.
-        assert_eq!(written.edges[0], ("Person_knows_Person".to_owned(), 4));
-        assert_eq!(
-            written.edges[1],
-            ("Person_worksFor_Organization".to_owned(), 2)
-        );
+    for (name, typing) in [
+        ("SHACL", Typing::Validate(&shacl)),
+        ("ShEx", Typing::Validate(&shex)),
+        ("by class", Typing::Assume(shacl.schema(), &by_class)),
+        ("by node", Typing::Assume(shacl.schema(), &by_node)),
+    ] {
+        for chunk_size in [1, 2, 3, 1 << 20] {
+            let (written, back) = round_trip(&typing, chunk_size);
+            let missing: Vec<_> = given.difference(&back).collect();
+            let extra: Vec<_> = back.difference(&given).collect();
+            assert!(
+                missing.is_empty() && extra.is_empty(),
+                "{name}, chunk {chunk_size}: missing {missing:#?}, extra {extra:#?}"
+            );
+            assert_eq!(written.triples as usize, given.len());
+            assert_eq!(
+                written.vertices,
+                [("Organization".to_owned(), 1), ("Person".to_owned(), 4)]
+            );
+            // alice→bob, alice→carol, bob→alice, carol→dave.
+            assert_eq!(written.edges[0], ("Person_knows_Person".to_owned(), 4));
+            assert_eq!(
+                written.edges[1],
+                ("Person_worksFor_Organization".to_owned(), 2)
+            );
+        }
     }
 }
 
 #[test]
+fn rdf_type_is_a_predicate_like_any_other() {
+    // No shape fixes the class: `rdf:type` is a set of IRIs, stored and read back.
+    let shapes = shapes::shex::from_compact(
+        "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+         <https://example.org/shapes/Thing> { rdf:type IRI * ; <https://example.org/p> xsd:string ? }",
+    )
+    .expect("ShExC");
+    let thing = &shapes.schema().vertices[0];
+    assert_eq!(
+        (thing.label.as_str(), thing.class.as_deref()),
+        ("Thing", None)
+    );
+    assert_eq!(thing.columns[0].predicate, graphar_rdf::RDF_TYPE);
+    let triples: Vec<Triple> = TurtleParser::new()
+        .for_slice(
+            b"@prefix ex: <https://example.org/> .
+              ex:a a ex:A, ex:B ; ex:p \"x\" .
+              ex:b ex:p \"y\" .",
+        )
+        .collect::<Result<_, _>>()
+        .expect("Turtle");
+    let store = InMemory::new();
+    let root = Path::from("t");
+    let typing = Typing::Validate(&shapes);
+    let written = block_on(write(
+        &store,
+        &root,
+        &typing,
+        triples.clone(),
+        &Options::default(),
+    ))
+    .expect("written");
+    assert_eq!(written.vertices, [("Thing".to_owned(), 2)]);
+    let back = block_on(read(&store, &root, &written.info, shapes.schema())).expect("read");
+    assert_eq!(set(back), set(triples));
+}
+
+/// How a graph is refused: a subject typed no shape, or more than one, or a triple with no place.
+#[derive(Debug, PartialEq)]
+enum Refused {
+    Typing(&'static str),
+    Unplaced(&'static str),
+}
+
+#[test]
 fn a_graph_that_does_not_conform_is_refused_and_nothing_written() {
-    let schema = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
+    let shapes = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
+    let by_class = ShapeMap::ByClass;
     let ex = "https://example.org/";
     let foaf = "http://xmlns.com/foaf/0.1/name";
     let xsd = "http://www.w3.org/2001/XMLSchema#";
     let rdf_type = graphar_rdf::RDF_TYPE;
-    for (extra, reason) in [
+    use Refused::{Typing as T, Unplaced as U};
+    // The extra triple; how a typing by class refuses it, where only placement validates; and how
+    // validation refuses it, which validates every constraint of the shapes, read closed. Validation
+    // is the maximal valid shape map, so a subject that fails takes every subject referring to it
+    // through `sh:node` with it, and the refusal names the first of them in IRI order: alice knows
+    // bob and carol, and bob knows alice.
+    for (extra, assumed, validated) in [
         (
             format!("<{ex}bob> <{rdf_type}> <{ex}Employee>"),
-            "its subject has a second rdf:type",
+            U("Person has no column or edge of it"),
+            T("https://example.org/alice"),
         ),
         (
             format!("<{ex}x> <{rdf_type}> <{ex}Thing>"),
-            "no shape targets this class",
+            T("https://example.org/x"),
+            T("https://example.org/x"),
         ),
         (
             format!("<{ex}notyped> <{foaf}> \"Nobody\""),
-            "its subject has no rdf:type",
+            T("https://example.org/notyped"),
+            T("https://example.org/notyped"),
         ),
         (
             format!("_:x <{foaf}> \"Anonymous\""),
-            "its subject is a blank node",
+            U("its subject is a blank node"),
+            U("its subject is a blank node"),
         ),
         (
             format!("<{ex}carol> <{foaf}> \"Caroline\""),
-            "Person.name has at most one value",
+            U("Person.name has at most one value"),
+            T("https://example.org/alice"),
         ),
         (
             format!("<{ex}alice> <{ex}knows> <{ex}nobody>"),
-            "its object is not a row of Person",
+            U("its object is not a row of Person"),
+            T("https://example.org/alice"),
         ),
         (
             format!("<{ex}alice> <{ex}knows> _:b"),
-            "its object is not a row of Person",
+            U("its object is not a row of Person"),
+            T("https://example.org/alice"),
         ),
         (
             format!("<{ex}bob> <{ex}shoeSize> \"42.5\"^^<{xsd}decimal>"),
-            "Person has no column or edge of it",
+            U("Person has no column or edge of it"),
+            T("https://example.org/bob"),
         ),
         (
             format!("<{ex}dave> <{ex}born> \"1985-13-01\"^^<{xsd}date>"),
-            "not a value of Person.born",
+            U("not a value of Person.born"),
+            // rudof takes an ill-typed literal for a value of its datatype, which `sh:datatype`
+            // does not (SHACL 4.1.1); placement refuses it.
+            U("not a value of Person.born"),
         ),
         (
             format!("<{ex}acme> <{ex}founded> \"1999\"^^<{xsd}integer>"),
-            "not a value of Organization.founded",
+            U("not a value of Organization.founded"),
+            T("https://example.org/acme"),
         ),
     ] {
         let line = format!("{extra} .\n");
@@ -178,24 +283,62 @@ fn a_graph_that_does_not_conform_is_refused_and_nothing_written() {
             .next()
             .expect("a triple")
             .expect("N-Triples");
-        let store = InMemory::new();
-        let triples = people().into_iter().chain([t]);
-        let err = block_on(write(
-            &store,
-            &Path::from("g"),
-            &schema,
-            triples,
-            &Options::default(),
-        ))
-        .expect_err(&extra);
-        let Error::Unplaced { reason: why, .. } = &err else {
-            panic!("{extra}: {err}");
-        };
-        assert_eq!(why, reason, "{extra}");
-        let written: Vec<_> = block_on(futures::TryStreamExt::try_collect::<Vec<_>>(
-            store.list(None),
-        ))
-        .expect("a listing");
-        assert!(written.is_empty(), "{extra}: wrote {written:?}");
+        for (typing, expected) in [
+            (Typing::Assume(shapes.schema(), &by_class), assumed),
+            (Typing::Validate(&shapes), validated),
+        ] {
+            let store = InMemory::new();
+            let triples = people().into_iter().chain([t.clone()]);
+            let err = block_on(write(
+                &store,
+                &Path::from("g"),
+                &typing,
+                triples,
+                &Options::default(),
+            ))
+            .expect_err(&extra);
+            let got = match &err {
+                Error::Unplaced { reason, .. } => U(Box::leak(reason.clone().into_boxed_str())),
+                Error::Typing { subject, .. } => T(Box::leak(subject.clone().into_boxed_str())),
+                other => panic!("{extra}: {other}"),
+            };
+            assert_eq!(got, expected, "{extra}: {err}");
+            let written: Vec<_> = block_on(futures::TryStreamExt::try_collect::<Vec<_>>(
+                store.list(None),
+            ))
+            .expect("a listing");
+            assert!(written.is_empty(), "{extra}: wrote {written:?}");
+        }
     }
+}
+
+#[test]
+fn validation_says_why_a_subject_has_no_type() {
+    let shapes = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
+    let line = "<https://example.org/carol> <http://xmlns.com/foaf/0.1/name> \"Caroline\" .\n";
+    let t: Triple = NTriplesParser::new()
+        .for_slice(line.as_bytes())
+        .next()
+        .expect("a triple")
+        .expect("N-Triples");
+    let err = block_on(write(
+        &InMemory::new(),
+        &Path::from("g"),
+        &Typing::Validate(&shapes),
+        people().into_iter().chain([t]),
+        &Options::default(),
+    ))
+    .expect_err("two names");
+    let Error::Typing { types, reasons, .. } = &err else {
+        panic!("{err}")
+    };
+    assert!(types.is_empty());
+    // Person refuses the second name (maxCount), Organization the class.
+    assert_eq!(reasons.len(), 2, "{reasons:#?}");
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.starts_with("https://example.org/shapes/Person: ")),
+        "{reasons:#?}"
+    );
 }

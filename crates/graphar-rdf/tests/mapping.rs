@@ -139,14 +139,10 @@ fn every_table_is_a_delimited_name_and_every_query_standard_sql() {
 
 #[test]
 fn a2_refuses_one_iri_for_two_things() {
+    // Two types may fix one class: a type is a shape, and the class is a triple the map writes.
     let mut s = schema();
     s.vertices[1].class = s.vertices[0].class.clone();
-    let err = mapping(&s).expect_err("two types, one class");
-    assert!(
-        err.to_string()
-            .contains("names both `Order` and `Customer`"),
-        "{err}"
-    );
+    assert!(mapping(&s).is_ok());
 
     let mut s = schema();
     s.edges[0].predicate = s.vertices[0].columns[0].predicate.clone();

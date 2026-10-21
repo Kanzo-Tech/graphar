@@ -20,8 +20,9 @@ use parquet::basic::Encoding;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 
-use crate::schema::{Cardinality, Column, Error, Object, Schema, Storage, user_types};
+use crate::schema::{Cardinality, Column, Error, Object, Storage, user_types};
 use crate::term::{Value, parse};
+use crate::typing::{Typing, types};
 use crate::{MAPPING_FILE, R2RML_FILE, RDF_LANG_STRING, RDF_TYPE, SUBJECT, plan, r2rml, rml};
 
 /// How [`write()`] writes.
@@ -67,25 +68,29 @@ type Place = (usize, usize);
 /// Only a graph that conforms to the closed reading of the schema is written, and every triple of
 /// it has one place:
 ///
-/// - every subject is an IRI with exactly one `rdf:type` triple, whose object is the class of one
-///   vertex type, and the subject is a row of that type;
-/// - every other triple of it is a value of a column of that type (an IRI, a tagged string, or a
-///   literal of the column's datatype that is a value the column holds) or an edge of an edge type
-///   from it, whose object is a row of the destination;
+/// - every subject is an IRI that `typing` gives exactly one vertex type, and it is a row of that
+///   type ([`Typing`]);
+/// - every triple of it is the `rdf:type` triple its type's shape fixes (stored nowhere: the
+///   mapping writes it), a value of a column of that type (an IRI, a tagged string, or a literal
+///   of the column's datatype that is a value the column holds), or an edge of an edge type from
+///   it, whose object is a row of the destination;
 /// - a single-valued column has at most one value per subject.
 ///
 /// A literal is stored as its value, and reads back in its canonical lexical form.
 ///
 /// # Errors
-/// [`Error::Unplaced`] for the first triple, in subject order, with no place, before anything is
-/// written; what [`Schema::check`] refuses; what the store or the writers refuse.
+/// [`Error::Typing`] for the first subject, in subject order, that the typing gives no type or
+/// more than one, and [`Error::Unplaced`] for the first triple with no place, before anything is
+/// written; what the schema's own check refuses; what the validator, the store or the writers
+/// refuse.
 pub async fn write(
     store: &dyn ObjectStore,
     root: &Path,
-    schema: &Schema,
+    typing: &Typing<'_>,
     triples: impl IntoIterator<Item = Triple>,
     options: &Options,
 ) -> Result<Written, Error> {
+    let schema = typing.schema();
     let plan = plan(schema)?;
     let text = rml(&plan);
     let info = schema.graph_info(&options.name, options.chunk_size);
@@ -107,27 +112,11 @@ pub async fn write(
     }
 
     // Each subject's place, the rows of a type sorted by IRI (`by_subject` is).
-    let class_of: HashMap<&str, usize> = schema
-        .vertices
-        .iter()
-        .enumerate()
-        .filter_map(|(i, v)| Some((v.class.as_deref()?, i)))
-        .collect();
+    let typed = types(typing, &by_subject)?;
     let mut rows: Vec<Vec<String>> = vec![Vec::new(); schema.vertices.len()];
     let mut place: HashMap<&str, Place> = HashMap::new();
-    for (subject, ts) in &by_subject {
-        let mut types = ts.iter().filter(|t| t.predicate.as_str() == RDF_TYPE);
-        let Some(typing) = types.next() else {
-            return Err(unplaced(&ts[0], "its subject has no rdf:type"));
-        };
-        if let Some(second) = types.next() {
-            return Err(unplaced(second, "its subject has a second rdf:type"));
-        }
-        let v = match &typing.object {
-            Term::NamedNode(c) => class_of.get(c.as_str()).copied(),
-            _ => None,
-        }
-        .ok_or_else(|| unplaced(typing, "no shape targets this class"))?;
+    for subject in by_subject.keys() {
+        let v = typed[subject];
         place.insert(subject, (v, rows[v].len()));
         rows[v].push(subject.clone());
     }
@@ -156,7 +145,12 @@ pub async fn write(
         let vertex = &schema.vertices[v];
         for t in ts {
             let p = t.predicate.as_str();
-            if p == RDF_TYPE {
+            if p == RDF_TYPE
+                && vertex
+                    .class
+                    .as_deref()
+                    .is_some_and(|c| matches!(&t.object, Term::NamedNode(o) if o.as_str() == c))
+            {
                 continue;
             }
             if let Some(c) = vertex.columns.iter().position(|c| c.predicate == p) {

@@ -30,6 +30,7 @@ oxttl = "0.2"
 # `reqwest` and `tokio` do not build for wasm32. Natively `rudof_rdf` still links Oxigraph and
 # `tokio`; neither reaches the wasm32 build.
 shex_ast = "0.3.29"
+shex_validation = "0.3.29"
 shacl = { version = "0.3.29", default-features = false }
 rudof_rdf = { version = "0.3.29", default-features = false }
 rudof_iri = "0.3.29"

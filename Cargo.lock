@@ -867,6 +867,7 @@ dependencies = [
  "rudof_rdf",
  "shacl",
  "shex_ast",
+ "shex_validation",
  "thiserror",
 ]
 
@@ -2781,6 +2782,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "shex_validation"
+version = "0.3.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15ce07924c0e60551de7de3f3484bdd37492ab45bae36ef90190f19a4a239fbc"
+dependencies = [
+ "colored",
+ "either",
+ "indexmap",
+ "itertools 0.14.0",
+ "prefixmap",
+ "rbe",
+ "rudof_config",
+ "rudof_iri",
+ "rudof_rdf",
+ "rudof_typing",
+ "serde",
+ "serde_json",
+ "shex_ast",
+ "termtree",
+ "thiserror",
+ "toml",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3018,6 +3045,12 @@ dependencies = [
  "libc",
  "winapi",
 ]
+
+[[package]]
+name = "termtree"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3369f5ac52d5eb6ab48c6b4ffdc8efbcad6b89c765749064ba298f2c68a16a76"
 
 [[package]]
 name = "testing_table"

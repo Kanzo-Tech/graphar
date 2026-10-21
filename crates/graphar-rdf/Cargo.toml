@@ -1,7 +1,7 @@
 [package]
 name = "graphar-rdf"
 version = "0.1.0-alpha.1"
-description = "RDF in Apache GraphAr: an RDF graph that conforms to its shapes (SHACL, ShEx) as a table per class and an edge type per property between classes, and its RDF reading as an RML-Core mapping. Builds for wasm32."
+description = "RDF in Apache GraphAr: an RDF graph that conforms to its shapes (SHACL, ShEx) as a table per shape, holding the nodes that validate against it, and an edge type per property between shapes, and its RDF reading as an RML-Core mapping. Builds for wasm32."
 keywords = ["graphar", "rdf", "rml", "shacl", "parquet"]
 categories = ["data-structures", "encoding", "wasm"]
 readme = "../../README.md"
@@ -22,6 +22,7 @@ object_store.workspace = true
 oxrdf.workspace = true
 oxttl.workspace = true
 shex_ast.workspace = true
+shex_validation.workspace = true
 shacl.workspace = true
 rudof_rdf.workspace = true
 rudof_iri.workspace = true

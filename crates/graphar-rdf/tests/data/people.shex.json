@@ -4,7 +4,7 @@
   "shapes": [
     {
       "type": "ShapeDecl",
-      "id": "https://example.org/PersonShape",
+      "id": "https://example.org/shapes/Person",
       "shapeExpr": {
         "type": "Shape",
         "expression": {
@@ -12,11 +12,11 @@
           "expressions": [
             { "type": "TripleConstraint", "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
               "valueExpr": { "type": "NodeConstraint", "values": ["https://example.org/Person"] } },
-            { "type": "TripleConstraint", "predicate": "http://xmlns.com/foaf/0.1/name",
+            { "type": "TripleConstraint", "predicate": "http://xmlns.com/foaf/0.1/name", "min": 0,
               "valueExpr": { "type": "NodeConstraint", "datatype": "http://www.w3.org/2001/XMLSchema#string" } },
             { "type": "TripleConstraint", "predicate": "https://schema.org/name", "min": 0,
               "valueExpr": { "type": "NodeConstraint", "datatype": "http://www.w3.org/2001/XMLSchema#string" } },
-            { "type": "TripleConstraint", "predicate": "https://example.org/age",
+            { "type": "TripleConstraint", "predicate": "https://example.org/age", "min": 0,
               "valueExpr": { "type": "NodeConstraint", "datatype": "http://www.w3.org/2001/XMLSchema#integer" } },
             { "type": "TripleConstraint", "predicate": "https://example.org/born", "min": 0,
               "valueExpr": { "type": "NodeConstraint", "datatype": "http://www.w3.org/2001/XMLSchema#date" } },
@@ -31,16 +31,16 @@
             { "type": "TripleConstraint", "predicate": "https://example.org/tag", "min": 0, "max": -1,
               "valueExpr": { "type": "NodeConstraint", "datatype": "http://www.w3.org/2001/XMLSchema#string" } },
             { "type": "TripleConstraint", "predicate": "https://example.org/knows", "min": 0, "max": -1,
-              "valueExpr": "https://example.org/PersonShape" },
+              "valueExpr": "https://example.org/shapes/Person" },
             { "type": "TripleConstraint", "predicate": "https://example.org/worksFor", "min": 0,
-              "valueExpr": "https://example.org/OrganizationShape" }
+              "valueExpr": "https://example.org/shapes/Organization" }
           ]
         }
       }
     },
     {
       "type": "ShapeDecl",
-      "id": "https://example.org/OrganizationShape",
+      "id": "https://example.org/shapes/Organization",
       "shapeExpr": {
         "type": "Shape",
         "expression": {

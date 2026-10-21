@@ -32,8 +32,9 @@ pub struct Schema {
 pub struct VertexType {
     /// The table's name, which is the GraphAr vertex type.
     pub label: String,
-    /// The class every row is an instance of, by the one `rdf:type` triple each subject has. A
-    /// type without one is targeted by nothing [`crate::write()`] reads, and holds no row.
+    /// The one class the type's shape fixes: every row has exactly that `rdf:type` triple, which
+    /// the mapping writes as the triples map's class and no column stores. A type is not a class:
+    /// its rows are the subjects that validate against its shape ([`crate::Typing`]).
     pub class: Option<String>,
     /// The columns beside `subject`, in table order.
     pub columns: Vec<Column>,
@@ -140,6 +141,20 @@ pub enum Error {
         /// Why it has no place.
         reason: String,
     },
+    /// A subject the typing gives no type, or more than one: the graph does not conform, and
+    /// nothing was written.
+    #[error("<{subject}> {}", typed(.types, .reasons))]
+    Typing {
+        /// The subject.
+        subject: String,
+        /// The vertex types it has: none, or more than one.
+        types: Vec<String>,
+        /// Why it has none of them, shape by shape, as the validator says.
+        reasons: Vec<String>,
+    },
+    /// The validator failed: what rudof says.
+    #[error("the validator: {0}")]
+    Validator(String),
     /// Writing or reading the GraphAr files.
     #[error(transparent)]
     Parquet(#[from] graphar_parquet::Error),
@@ -155,6 +170,14 @@ pub enum Error {
     /// A table that does not hold what its information file says.
     #[error("{0}")]
     Invalid(String),
+}
+
+fn typed(types: &[String], reasons: &[String]) -> String {
+    match types {
+        [] if reasons.is_empty() => "has no type".to_owned(),
+        [] => format!("validates against no shape: {}", reasons.join("; ")),
+        _ => format!("has more than one type: {}", types.join(", ")),
+    }
 }
 
 impl Column {
@@ -201,8 +224,8 @@ pub fn user_types() -> UserTypes {
 }
 
 impl Schema {
-    /// Whether the schema can be read unambiguously (A2): two vertex types do not share a class,
-    /// two columns of a type do not share a predicate, and no edge type's predicate is a column
+    /// Whether the schema can be read unambiguously (A2): two columns of a type do not share a
+    /// predicate, and no edge type's predicate is a column
     /// predicate of its source. Names are unique, none is reserved, and every IRI is one.
     ///
     /// # Errors
@@ -219,16 +242,12 @@ impl Schema {
                 .map_err(|_| Error::NotAnIri(text.to_owned()))
         };
         let mut labels: HashMap<&str, ()> = HashMap::new();
-        let mut classes: HashMap<&str, &str> = HashMap::new();
         for v in &self.vertices {
             if !named(&v.label) || labels.insert(&v.label, ()).is_some() {
                 return Err(Error::Name(v.label.clone()));
             }
             if let Some(class) = &v.class {
                 iri(class)?;
-                if let Some(other) = classes.insert(class, &v.label) {
-                    return Err(ambiguous(class, other, &v.label));
-                }
             }
             let mut names: HashMap<&str, ()> = HashMap::new();
             let mut predicates: HashMap<&str, String> = HashMap::new();

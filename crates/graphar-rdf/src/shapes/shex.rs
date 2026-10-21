@@ -3,33 +3,60 @@
 
 use prefixmap::{IriRef, PrefixMap};
 use rudof_iri::IriS;
+use shex_ast::ir::ast2ir::AST2IR;
+use shex_ast::ir::map_state::MapState;
+use shex_ast::ir::schema_ir::SchemaIR;
+use shex_ast::ir::semantic_actions_registry::SemanticActionsRegistry;
 use shex_ast::{
-    NodeKind, ObjectValue, Schema as ShEx, ShExParser, ShapeExpr, ShapeExprLabel, TripleExpr,
-    ValueSetValue,
+    NodeKind, ObjectValue, ResolveMethod, Schema as ShEx, ShExParser, ShapeExpr, ShapeExprLabel,
+    TripleExpr, ValueSetValue,
 };
+use shex_validation::ValidatorConfig;
 
-use super::{Shape, Target};
-use crate::schema::{Cardinality, Error, Object, Schema};
+use super::{Shape, Shapes, Target};
+use crate::schema::{Cardinality, Error, Object};
+use crate::validate::Document;
 use crate::{RDF_LANG_STRING, RDF_TYPE};
 
-/// The schema of a ShEx schema in ShExJ, the JSON-LD form.
+/// The source IRI that names a document in rudof's errors; nothing resolves against it.
+const SOURCE: &str = "urn:graphar-rdf:shex";
+
+/// The shapes of a ShEx schema in ShExJ, the JSON-LD form.
 ///
 /// # Errors
 /// [`Error::Shapes`] when the document is not a ShExJ schema.
-pub fn from_json(text: &str) -> Result<Schema, Error> {
+pub fn from_json(text: &str) -> Result<Shapes, Error> {
     let shex = ShEx::from_reader(text.as_bytes()).map_err(|e| Error::Shapes(e.to_string()))?;
-    Ok(super::schema(&shapes(&shex)))
+    compiled(&shex)
 }
 
-/// The schema of a ShEx schema in ShExC, the compact syntax.
+/// The shapes of a ShEx schema in ShExC, the compact syntax.
 ///
 /// # Errors
 /// [`Error::Shapes`] when the document does not parse.
-pub fn from_compact(text: &str) -> Result<Schema, Error> {
-    // The source IRI names the document in rudof's errors; nothing resolves against it.
-    let source = IriS::new_unchecked("urn:graphar-rdf:shex");
+pub fn from_compact(text: &str) -> Result<Shapes, Error> {
+    let source = IriS::new_unchecked(SOURCE);
     let shex = ShExParser::parse(text, None, &source).map_err(|e| Error::Shapes(e.to_string()))?;
-    Ok(super::schema(&shapes(&shex)))
+    compiled(&shex)
+}
+
+/// The shapes of `shex`, and the schema rudof's validator runs on, compiled as rudof compiles it.
+fn compiled(shex: &ShEx) -> Result<Shapes, Error> {
+    let source = IriS::new_unchecked(SOURCE);
+    let mut map_state = MapState::default();
+    let registry = SemanticActionsRegistry::default();
+    registry.set_map_state(&mut map_state);
+    let mut ir = SchemaIR::new(registry);
+    AST2IR::new(&ResolveMethod::default(), map_state)
+        .compile(
+            shex,
+            &source,
+            &None,
+            &mut ir,
+            ValidatorConfig::default().external_resolvers(),
+        )
+        .map_err(|e| Error::Shapes(e.to_string()))?;
+    Ok(super::read(&shapes(shex), Document::ShEx(Box::new(ir))))
 }
 
 fn shapes(shex: &ShEx) -> Vec<Shape> {
@@ -54,6 +81,7 @@ fn shapes(shex: &ShEx) -> Vec<Shape> {
                     inverse,
                     predicate,
                     value_expr,
+                    min,
                     max,
                     ..
                 } = tc
@@ -67,14 +95,19 @@ fn shapes(shex: &ShEx) -> Vec<Shape> {
                     continue;
                 };
                 let value = value_expr.as_deref();
-                if predicate == RDF_TYPE {
-                    if let Some(ShapeExpr::NodeConstraint(nc)) = value
-                        && let Some([ValueSetValue::ObjectValue(ObjectValue::IriRef(c))]) =
-                            nc.values().as_deref()
-                        && let Some(c) = iri(c)
-                    {
-                        class.get_or_insert(c);
-                    }
+                let values = |value: Option<&ShapeExpr>| match value {
+                    Some(ShapeExpr::NodeConstraint(nc)) => nc.values(),
+                    _ => None,
+                };
+                // `min` and `max` default to 1: `rdf:type [c]` is exactly one class triple.
+                if predicate == RDF_TYPE
+                    && min.unwrap_or(1) == 1
+                    && max.unwrap_or(1) == 1
+                    && let Some([ValueSetValue::ObjectValue(ObjectValue::IriRef(c))]) =
+                        values(value).as_deref()
+                    && let Some(c) = iri(c)
+                {
+                    class.get_or_insert(c);
                     continue;
                 }
                 let target = match value {
@@ -83,12 +116,19 @@ fn shapes(shex: &ShEx) -> Vec<Shape> {
                         None => continue,
                     },
                     Some(ShapeExpr::NodeConstraint(nc)) => {
+                        let iris = nc.values().is_some_and(|vs| {
+                            !vs.is_empty()
+                                && vs.iter().all(|v| {
+                                    matches!(v, ValueSetValue::ObjectValue(ObjectValue::IriRef(_)))
+                                })
+                        });
                         match (nc.datatype().as_ref().and_then(iri), nc.node_kind()) {
                             (Some(dt), _) if dt == RDF_LANG_STRING => {
                                 Target::Column(Object::LangString)
                             }
                             (Some(dt), _) => Target::Column(Object::Literal(dt)),
                             (None, Some(NodeKind::Iri)) => Target::Column(Object::Iri),
+                            (None, None) if iris => Target::Column(Object::Iri),
                             _ => continue,
                         }
                     }

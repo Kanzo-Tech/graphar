@@ -4,10 +4,11 @@
 //! cargo run -p graphar-rdf --example write -- <shapes.ttl | shapes.shex | shapes.shex.json> <data.ttl | data.nt> <dir> [chunk_size]
 //! ```
 //!
-//! A graph that does not conform to the shapes is refused, naming the triple and why.
+//! Each subject is typed by the shape it validates against. A graph that does not conform to the
+//! shapes is refused, naming the subject or the triple and why.
 
 use futures::executor::block_on;
-use graphar_rdf::{Options, shapes, write};
+use graphar_rdf::{Options, Typing, shapes, write};
 use object_store::{local::LocalFileSystem, path::Path};
 use oxttl::{NTriplesParser, TurtleParser};
 
@@ -16,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let [shapes_file, data, dir, rest @ ..] = args.as_slice() else {
         return Err("usage: write <shapes> <data> <dir> [chunk_size]".into());
     };
-    let schema = match shapes_file.as_str() {
+    let shapes = match shapes_file.as_str() {
         f if f.ends_with(".json") => shapes::shex::from_json(&std::fs::read_to_string(f)?)?,
         f if f.ends_with(".shex") => shapes::shex::from_compact(&std::fs::read_to_string(f)?)?,
         f => shapes::shacl::from_turtle(&std::fs::read_to_string(f)?)?,
@@ -41,7 +42,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(1 << 20),
         ..Options::default()
     };
-    let written = block_on(write(&store, &Path::from(""), &schema, triples, &options))?;
+    let written = block_on(write(
+        &store,
+        &Path::from(""),
+        &Typing::Validate(&shapes),
+        triples,
+        &options,
+    ))?;
     println!(
         "{} triples: {:?}, {:?}",
         written.triples, written.vertices, written.edges
