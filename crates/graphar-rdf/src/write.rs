@@ -31,11 +31,8 @@ pub struct Options {
     pub name: String,
     /// The rows of each chunk.
     pub chunk_size: u64,
-    /// Parquet's writer settings: the codec, the row groups.
+    /// Parquet's writer settings: the codec.
     pub props: WriterProperties,
-    /// Whether to count what is written (`graphar-stats`): the footer of every vertex chunk, and a
-    /// Puffin file for each vertex type of more than one chunk.
-    pub stats: bool,
 }
 
 impl Default for Options {
@@ -44,7 +41,6 @@ impl Default for Options {
             name: "graph".to_owned(),
             chunk_size: 1 << 20,
             props: WriterProperties::default(),
-            stats: true,
         }
     }
 }
@@ -66,9 +62,7 @@ pub struct Written {
 type Place = (usize, usize);
 
 /// **Writes `triples` as the GraphAr graph `schema` reads**, under `root`: every vertex table,
-/// every edge table, a Puffin file per vertex type of several chunks, `mapping.ttl` and
-/// `mapping.r2rml.ttl`, and the
-/// information files last, so a reader that finds the graph document finds everything it names.
+/// every edge table, `mapping.ttl` and `mapping.r2rml.ttl`, and the information files last, so a reader that finds the graph document finds everything it names.
 ///
 /// Only a graph that conforms to the closed reading of the schema is written, and every triple of
 /// it has one place:
@@ -216,7 +210,6 @@ pub async fn write(
     let writer = Writer {
         props: index_encoding(options.props.clone()),
         user_types: user_types(),
-        footer: options.stats.then(graphar_stats::footer),
     };
     let mut vertices = Vec::new();
     for (v, vertex) in schema.vertices.iter().enumerate() {
@@ -225,7 +218,7 @@ pub async fn write(
             columns.push((column.name.clone(), array(column, &cells[v][c])?));
         }
         let batch = RecordBatch::try_from_iter(columns)?;
-        let n = write_table(store, root, &info.vertices[v], &batch, &writer, options).await?;
+        let n = write_vertices(store, root, &info.vertices[v], &[batch], &writer).await?;
         vertices.push((vertex.label.clone(), n));
     }
     let mut edges = Vec::new();
@@ -307,24 +300,6 @@ fn index_encoding(props: WriterProperties) -> WriterProperties {
             .set_column_encoding(path, Encoding::DELTA_BINARY_PACKED);
     }
     builder.build()
-}
-
-async fn write_table(
-    store: &dyn ObjectStore,
-    root: &Path,
-    info: &graphar_info::VertexInfo,
-    batch: &RecordBatch,
-    writer: &Writer,
-    options: &Options,
-) -> Result<u64, Error> {
-    let n = write_vertices(store, root, info, std::slice::from_ref(batch), writer).await?;
-    // One chunk's footer already holds the table's exact counts; a sketch is for the distinct
-    // count of several, which their footers cannot give.
-    if options.stats && n > info.chunk_size {
-        let puffin = graphar_stats::puffin(info, batch)?;
-        put(store, root, &graphar_stats::puffin_path(info), puffin).await?;
-    }
-    Ok(n)
 }
 
 async fn put(

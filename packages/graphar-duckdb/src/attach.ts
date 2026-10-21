@@ -77,7 +77,7 @@ export const SRC_INDEX_COL = '_graphArSrcIndex';
 export const DST_INDEX_COL = '_graphArDstIndex';
 
 /** The relations the graph's information files become, beside the views. */
-const METADATA = ['graphar_vertex_types', 'graphar_edge_types', 'graphar_properties', 'graphar_extra_info', 'graphar_chunks'] as const;
+const METADATA = ['graphar_vertex_types', 'graphar_edge_types', 'graphar_properties', 'graphar_extra_info', 'graphar_chunks', 'graphar_column_stats'] as const;
 
 const holders = new WeakMap<Engine, Map<string, number>>();
 
@@ -137,7 +137,7 @@ const COUNT = `CASE WHEN octet_length(content) = 8
 /**
  * **Attach a GraphAr graph to the engine as the catalog `catalog`**: a view per vertex type,
  * `"<catalog>"."<type>"`, and per edge type, `"<catalog>"."<src_type>_<edge_type>_<dst_type>"`,
- * with GraphAr's own columns, and the information files as five relations.
+ * with GraphAr's own columns, and the information files as five relations and the chunks' statistics as a sixth.
  *
  * ```ts
  * await using g = await attachGraph(engine, 'job', (paths) => paths.map((p) => `${url}/${p}`), { entry: 'fossil.graph.yml' });
@@ -167,6 +167,12 @@ const COUNT = `CASE WHEN octet_length(content) = 8
  *   exactly the name `resolve` gave the file, so `parquet_metadata(path)` and
  *   `parquet_kv_metadata(path)` read it. Only the edge type's first adjacency list is listed, with
  *   its offset chunks if it is ordered.
+ * - `graphar_column_stats(type, property, null_count, min, max, distinct_min, distinct_max)`: one row
+ *   per property of a single value and a GraphAr type, read from its chunks' Parquet `Statistics`,
+ *   never from a value: `null_count` sums the row groups', `min` and `max` are the least and greatest
+ *   in the property's type, as text, and the distinct count is `distinct_min … distinct_max`, the
+ *   largest row group's and their sum, which are one number when the property has one row group. A
+ *   count some row group does not carry is `NULL` for the property: no value is scanned to make it.
  *
  * A graph `prefix` is read against the graph document's directory, where GraphAr's C++ library
  * reads a relative one against its working directory; without one, the data is under the document,
@@ -372,7 +378,39 @@ export async function attachGraph(
     adj.forEach((k) => chunk(name, 'adj_list', k));
     groups.forEach((g) => g.forEach((k) => chunk(name, 'edge_property', k)));
   });
+  // Each property's counts over its chunks, from the row groups' own `Statistics`: nulls add up, the
+  // bounds are the least and greatest in the column's type, and the distinct count of several row
+  // groups lies between the largest one's and their sum (exact when there is one). A count some row
+  // group does not carry is no count for the table. A list or a user-defined type is not counted:
+  // Parquet's statistics are its leaf values', not the property's.
+  const counted = [
+    ...vertices.map((v, i) => [v.type, v.property_groups, vertexFiles[i]!] as const),
+    ...edges.map((e, i) => [edgeName(e), e.property_groups, edgeFiles[i]!.groups] as const),
+  ].flatMap(([type, groups, perGroup]) =>
+    groups.flatMap((g, n) =>
+      g.properties
+        .filter((p) => p.cardinality === 'single' && !Object.hasOwn(userTypes, p.data_type) && perGroup[n]!.length > 0)
+        .map((p) => {
+          const t = duckType(p.data_type, `\`${type}\`.\`${p.name}\``, userTypes);
+          const all = (c: string) => `count(*) = count(${c})`;
+          return `SELECT ${lit(type)} AS type, ${lit(p.name)} AS property,
+            CASE WHEN ${all('stats_null_count')} THEN sum(stats_null_count) END AS null_count,
+            CAST(min(TRY_CAST(stats_min_value AS ${t})) AS VARCHAR) AS min,
+            CAST(max(TRY_CAST(stats_max_value AS ${t})) AS VARCHAR) AS max,
+            CASE WHEN ${all('stats_distinct_count')} THEN max(stats_distinct_count) END AS distinct_min,
+            CASE WHEN ${all('stats_distinct_count')} THEN sum(stats_distinct_count) END AS distinct_max
+            FROM parquet_metadata(${files(perGroup[n]!)}) WHERE path_in_schema = ${lit(p.name)}`;
+        }),
+    ),
+  );
+  const STATS: readonly (readonly [string, string])[] = [
+    ['type', 'VARCHAR'], ['property', 'VARCHAR'], ['null_count', 'UBIGINT'], ['min', 'VARCHAR'], ['max', 'VARCHAR'],
+    ['distinct_min', 'UBIGINT'], ['distinct_max', 'UBIGINT'],
+  ];
   statements.push(
+    viewOf('graphar_column_stats', counted.length === 0
+      ? relationOf(STATS, [])
+      : `SELECT ${STATS.map(([c, t]) => `CAST(${ident(c)} AS ${t}) AS ${ident(c)}`).join(', ')} FROM (${counted.join(' UNION ALL ')})`),
     viewOf('graphar_chunks', relationOf([['type', 'VARCHAR'], ['kind', 'VARCHAR'], ['path', 'VARCHAR']], chunkRows)),
     viewOf('graphar_vertex_types', relationOf(
       [['type', 'VARCHAR'], ['count', 'UBIGINT'], ['ordinal', 'INTEGER']],

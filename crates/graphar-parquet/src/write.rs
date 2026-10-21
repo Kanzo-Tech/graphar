@@ -11,7 +11,7 @@ use graphar_info::{
 };
 use object_store::{ObjectStore, PutOptions, PutPayload, path::Path};
 use parquet::arrow::ArrowWriter;
-use parquet::file::{metadata::KeyValue, properties::WriterProperties};
+use parquet::file::properties::WriterProperties;
 
 use crate::error::{Error, invalid};
 use crate::types::{Options, UserTypes, holds_property};
@@ -56,14 +56,24 @@ async fn put_parquet(
     relative: &str,
     batch: &RecordBatch,
     props: &WriterProperties,
-    footer: Vec<KeyValue>,
 ) -> Result<(), Error> {
-    let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props.clone()))?;
+    let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(counted(props, batch)))?;
     writer.write(batch)?;
-    for kv in footer {
-        writer.append_key_value_metadata(kv);
-    }
     put(store, root, relative, writer.into_inner()?).await
+}
+
+/// The caller's settings, with a chunk written as one row group whose `Statistics` carry
+/// `distinct_count` beside the nulls and bounds Parquet always counts. Parquet's statistics are per
+/// row group, so one group per chunk makes them the chunk's, and a reader combines chunks into a
+/// table's without opening a page.
+fn counted(props: &WriterProperties, batch: &RecordBatch) -> WriterProperties {
+    props
+        .clone()
+        .into_builder()
+        .set_max_row_group_row_count(Some(batch.num_rows().max(1)))
+        .set_max_row_group_bytes(None)
+        .set_write_row_group_number_distinct_values(true)
+        .build()
 }
 
 fn parquet_only(at: impl Into<String>, file_type: FileType) -> Result<(), Error> {
@@ -186,12 +196,7 @@ pub async fn write_vertices(
             );
             let path = paths::vertex_chunk(info, group, k);
             let batch = batch_of(chunk)?;
-            let footer = match &options.footer {
-                Some(footer) => (footer.0)(info, group, &batch)
-                    .map_err(|reason| invalid(format!("{at}, chunk {k}"), reason))?,
-                None => Vec::new(),
-            };
-            put_parquet(store, root, &path, &batch, &options.props, footer).await?;
+            put_parquet(store, root, &path, &batch, &options.props).await?;
         }
     }
     put_count(store, root, &paths::vertex_count(info), count).await?;
@@ -334,7 +339,6 @@ pub async fn write_edges(
                 &paths::offset_chunk(info, adj, part),
                 &batch,
                 &options.props,
-                Vec::new(),
             )
             .await?;
         }
@@ -348,7 +352,6 @@ pub async fn write_edges(
                 &paths::adj_list_chunk(info, adj, part, chunk),
                 &adj_list,
                 &options.props,
-                Vec::new(),
             )
             .await?;
             let mut column = 2;
@@ -362,7 +365,6 @@ pub async fn write_edges(
                     &path,
                     &rows.project(&projection)?,
                     &options.props,
-                    Vec::new(),
                 )
                 .await?;
             }

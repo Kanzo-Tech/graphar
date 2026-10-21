@@ -113,7 +113,7 @@ describe('attachGraph over the sample', async () => {
     }
   });
 
-  it('declares the type of every column of the five relations', async () => {
+  it('declares the type of every column of the six relations', async () => {
     const columns = async (relation: string) =>
       (await e.rows(`SELECT column_name, column_type FROM (DESCRIBE "g".${relation})`)).map((r) => [r['column_name'], r['column_type']]);
     expect(await columns('graphar_vertex_types')).toEqual([['type', 'VARCHAR'], ['count', 'UBIGINT'], ['ordinal', 'INTEGER']]);
@@ -127,6 +127,25 @@ describe('attachGraph over the sample', async () => {
     ]);
     expect(await columns('graphar_extra_info')).toEqual([['key', 'VARCHAR'], ['value', 'VARCHAR']]);
     expect(await columns('graphar_chunks')).toEqual([['type', 'VARCHAR'], ['kind', 'VARCHAR'], ['path', 'VARCHAR']]);
+    expect(await columns('graphar_column_stats')).toEqual([
+      ['type', 'VARCHAR'], ['property', 'VARCHAR'], ['null_count', 'UBIGINT'], ['min', 'VARCHAR'], ['max', 'VARCHAR'],
+      ['distinct_min', 'UBIGINT'], ['distinct_max', 'UBIGINT'],
+    ]);
+  });
+
+  it("counts each property from its chunks' Parquet statistics", async () => {
+    // `person` is seven rows in chunks of three; each chunk's row group carries its own counts.
+    const rows = num(await e.rows(`SELECT property, null_count, min, max, distinct_min, distinct_max
+      FROM "g".graphar_column_stats WHERE type = 'person' ORDER BY property`));
+    expect(rows).toEqual([
+      // true, false, true | true, null, false | true
+      { property: 'active', null_count: 1, min: 'false', max: 'true', distinct_min: 2, distinct_max: 5 },
+      // 31, 25, null | 40, 19, 52 | 33: compared as integers, not as text
+      { property: 'age', null_count: 1, min: '19', max: '52', distinct_min: 3, distinct_max: 6 },
+      { property: 'born', null_count: 1, min: '1969-01-01', max: '2002-11-09', distinct_min: 3, distinct_max: 6 },
+      { property: 'id', null_count: 0, min: '100', max: '106', distinct_min: 3, distinct_max: 7 },
+      { property: 'name', null_count: 0, min: 'ana', max: 'gus', distinct_min: 3, distinct_max: 7 },
+    ]);
   });
 
   it('gives a reader one id space by arithmetic over the relations', async () => {

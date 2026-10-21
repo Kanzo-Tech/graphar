@@ -11,9 +11,9 @@
 //!   type, per edge type and per multi-valued or language-tagged column. It reads no data, so a
 //!   host can ask for it, or for [`mapping()`], its RML-Core, before writing. [`rml()`] and
 //!   [`r2rml()`] serialize it; R2RML needs the languages a column holds, which only the data has.
-//! - [`write()`] places every triple by the schema and writes the graph, the counts of
-//!   `graphar-stats` in every vertex chunk and a Puffin file per type of several chunks, then the
-//!   two mappings, then the information files.
+//! - [`write()`] places every triple by the schema and writes the graph, each chunk one row group
+//!   whose Parquet `Statistics` carry its distinct counts, then the two mappings, then the
+//!   information files.
 //! - [`read()`] is the plan evaluated over the written tables, natively: the triples it reads are
 //!   the triples [`write()`] was given, up to the canonical lexical form of a literal
 //!   (**Statement R**). The same holds through a processor that runs either mapping on the tables;

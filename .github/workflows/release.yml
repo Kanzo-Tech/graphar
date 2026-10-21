@@ -1,7 +1,7 @@
 name: release
 
-# Publishes when a GitHub Release is published: `graphar-info`, `graphar-parquet`, `graphar-stats`
-# and `graphar-rdf` to crates.io,
+# Publishes when a GitHub Release is published: `graphar-info`, `graphar-parquet` and
+# `graphar-rdf` to crates.io,
 # and `@kanzo-tech/graphar-duckdb` to npm. The release is the decision, made by a person, and this
 # workflow only carries it out: no version PR, no CHANGELOG. The release body is the release notes.
 #
@@ -77,10 +77,6 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
       - name: Publish graphar-parquet
         run: cargo publish -p graphar-parquet --locked
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-      - name: Publish graphar-stats
-        run: cargo publish -p graphar-stats --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
       - name: Publish graphar-rdf

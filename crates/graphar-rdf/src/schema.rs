@@ -146,9 +146,6 @@ pub enum Error {
     /// The information files.
     #[error(transparent)]
     Info(#[from] graphar_info::Error),
-    /// Counting what is written.
-    #[error(transparent)]
-    Stats(#[from] graphar_stats::Error),
     /// Assembling a batch.
     #[error(transparent)]
     Arrow(#[from] arrow_schema::ArrowError),

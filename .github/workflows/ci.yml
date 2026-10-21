@@ -32,7 +32,7 @@ jobs:
           RUSTFLAGS: -D warnings --cfg getrandom_backend="wasm_js"
         run: >-
           cargo check --target wasm32-unknown-unknown --locked
-          -p graphar-info -p graphar-parquet -p graphar-stats -p graphar-rdf
+          -p graphar-info -p graphar-parquet -p graphar-rdf
       - name: no tokio in the wasm32 build
         run: |
           if cargo tree --target wasm32-unknown-unknown -e normal --workspace --locked --prefix none \
@@ -61,8 +61,7 @@ jobs:
           git add -N conformance
           git diff --exit-code --stat -- conformance
 
-  # graphar-stats' Theta sketches read by Apache DataSketches itself, and graphar-rdf's two mappings,
-  # RML-Core and R2RML, run by two processors on two engines: Morph-KGC on DuckDB and PostgreSQL,
+  # graphar-rdf's two mappings, RML-Core and R2RML, run by two processors on two engines: Morph-KGC on DuckDB and PostgreSQL,
   # RMLMapper on PostgreSQL. Each must give back exactly the triples the graph was written from.
   interop:
     runs-on: ubuntu-latest
@@ -84,9 +83,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - run: pip install datasketches==5.2.0 duckdb==1.5.6 rdflib==7.2.1 morph-kgc==2.10.0 duckdb-engine==0.17.0 psycopg2-binary==2.9.13
-      - name: DataSketches reads graphar-stats' sketch
-        run: cargo run -q -p graphar-stats --example theta --locked | python3 -I crates/graphar-stats/tests/read_sketch.py
+      - run: pip install duckdb==1.5.6 rdflib==7.2.1 morph-kgc==2.10.0 duckdb-engine==0.17.0 psycopg2-binary==2.9.13
       - name: RMLMapper
         run: curl -sSfL -o rmlmapper.jar https://github.com/RMLio/rmlmapper-java/releases/download/v8.1.0/rmlmapper-8.1.0-r380-all.jar
       - name: the mappings on Morph-KGC and RMLMapper

@@ -132,6 +132,32 @@ fn vertex_chunks_carry_the_internal_id_then_the_group() {
 }
 
 #[test]
+fn a_chunk_is_one_row_group_that_counts_its_distinct_values() {
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+
+    let (store, root) = written();
+    let person = sample::person();
+    let chunk = paths::vertex_chunk(&person, &person.property_groups[1], 0);
+    let path = Path::parse(format!("{root}/{chunk}")).unwrap();
+    let bytes = block_on(async { store.get(&path).await?.bytes().await }).unwrap();
+    let footer = SerializedFileReader::new(bytes).unwrap();
+    let metadata = footer.metadata();
+    assert_eq!(metadata.num_row_groups(), 1);
+    let distinct = |name: &str| {
+        let group = metadata.row_group(0);
+        let column = (0..group.num_columns())
+            .map(|c| group.column(c))
+            .find(|c| c.column_descr().name() == name)
+            .unwrap();
+        let stats = column.statistics().unwrap();
+        (stats.distinct_count_opt(), stats.null_count_opt())
+    };
+    // Chunk 0's ages are 31, 25 and a null: two values and one null, as `pg_stats` counts them.
+    assert_eq!(distinct("age"), (Some(2), Some(1)));
+    assert_eq!(distinct(VERTEX_INDEX_COL), (Some(3), Some(0)));
+}
+
+#[test]
 fn an_ordered_list_is_partitioned_sorted_and_offset() {
     let (store, root) = written();
     let knows = sample::knows();
