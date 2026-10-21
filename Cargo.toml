@@ -38,7 +38,7 @@ prefixmap = "0.3.29"
 # `async`/`object_store` are off because both bring `tokio` into the wasm32 build.
 parquet = { version = "60", default-features = false, features = ["arrow"] }
 # No default features: `fs` and every cloud store bring `tokio`. The store is the caller's.
-object_store = { version = "0.13", default-features = false }
+object_store = { version = "0.14", default-features = false }
 bytes = "1"
 
 [workspace.lints.rust]
