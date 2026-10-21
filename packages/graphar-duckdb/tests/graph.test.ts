@@ -86,7 +86,7 @@ describe('Graph over the sample', async () => {
       const { sql, columns } = g.match([{ as: 'p', type: 'person' }, { edge: 'created' }, { as: 's', type: 'software' }], {
         columns: ['p.name', 's.name'],
       });
-      expect(columns.map((c) => [c.name, c.variable, c.property.type])).toEqual([['p.name', 'p', 'VARCHAR'], ['s.name', 's', 'VARCHAR']]);
+      expect(columns.map((c) => [c.name, c.variable, c.property?.type])).toEqual([['p.name', 'p', 'VARCHAR'], ['s.name', 's', 'VARCHAR']]);
       expect(await rows(`SELECT * FROM (${sql}) ORDER BY ALL`)).toEqual([['ana', 'lop'], ['cy', 'ripple'], ['gus', 'lop'], ['gus', 'nebula']]);
       expect(Object.keys((await e.rows(sql))[0]!)).toEqual(['p.name', 's.name']);
     });
@@ -105,6 +105,16 @@ describe('Graph over the sample', async () => {
         { columns: ['k.weight', 's.name'] },
       );
       expect(await rows(`SELECT * FROM (${sql}) ORDER BY ALL`)).toEqual([[0.125, 'lop'], [0.75, 'ripple']]);
+    });
+
+    it("answers a vertex's index for its bare variable, which a reach predicate applies to", async () => {
+      const { sql, columns } = g.match([{ as: 'p', type: 'person' }, { edge: 'created' }, { as: 's', type: 'software' }], {
+        columns: ['p', 's.name'],
+      });
+      expect(columns[0]).toEqual({ name: 'p', variable: 'p' });
+      const lop = g.reach({ type: 'software', where: "name = 'lop'" }, 'person').replace('"_graphArVertexIndex"', '"p"');
+      expect(await rows(`SELECT DISTINCT p::INTEGER FROM (${sql}) WHERE ${lop} ORDER BY ALL`)).toEqual([[0], [6]]);
+      expect(() => g.match([{ as: 'p', type: 'person' }, { as: 'k', edge: 'knows' }, { type: 'person' }], { columns: ['k'] })).toThrow(GraphArError);
     });
 
     it('reads every property of every named element without columns', () => {

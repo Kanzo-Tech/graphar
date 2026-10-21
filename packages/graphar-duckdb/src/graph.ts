@@ -27,7 +27,8 @@ export interface Graph {
   /** Every edge of an edge type, by {@link EdgeType.name}: the index of each end, in the order stored. */
   links(edgeType: string, options?: Signal): Promise<{ readonly src: Uint32Array; readonly dst: Uint32Array }>;
   /**
-   * The edges at one vertex, each with the vertex at its other end: `out` where it is the source,
+   * The edges at one vertex, each with the vertex at its other end, ordered by edge type as the graph
+   * lists them, `out` before `in`, then the other end's index: `out` where it is the source,
    * `in` where it is the destination, `both` (the default) for either. An edge of an undirected
    * type is read as stored, so it is `out` at the end GraphAr keeps as its source.
    */
@@ -46,8 +47,10 @@ export interface Graph {
   /**
    * A fixed-length pattern across types — vertex, edge, vertex, … — as one SQL query, the way
    * SQL/PGQ's `GRAPH_TABLE (… MATCH … COLUMNS …)` reads: a row per match, a column per entry of
-   * `columns`, each `variable.property` and named so (`"u.name"`). Without `columns`, every property
-   * of every named element. A `where` is SQL over the element's own columns, by their bare names.
+   * `columns`, each `variable.property` and named so (`"u.name"`), or a vertex's bare variable for
+   * its index within its type, named by the variable (`"u"`), which is what a {@link Graph.reach}
+   * predicate over that type is applied to. Without `columns`, every property of every named
+   * element. A `where` is SQL over the element's own columns, by their bare names.
    */
   match(pattern: Pattern, options?: { readonly columns?: readonly string[] }): { readonly sql: string; readonly columns: readonly Column[] };
   /**
@@ -173,10 +176,11 @@ export type Pattern = readonly (VertexPattern | EdgePattern)[];
 
 /** A column of {@link Graph.match}'s answer. */
 export interface Column {
-  /** Its name in the answer: `u.name`. */
+  /** Its name in the answer: `u.name`, or `u` for a vertex's index. */
   readonly name: string;
   readonly variable: string;
-  readonly property: Property;
+  /** The property it reads; absent for a vertex's index within its type. */
+  readonly property?: Property;
 }
 
 /** A single-quoted SQL string literal. */
@@ -350,7 +354,7 @@ export function graphOf({ engine, vertexTypes, edgeTypes, detach }: Parts): Grap
       const answers = await Promise.all(
         ends.map(({ e, at, other }) =>
           query(
-            `SELECT CAST(${ident(other)} AS UINTEGER) AS ${ident(`${HIDDEN}other`)}, * FROM ${e.table} WHERE ${ident(at)} = ${index}`,
+            `SELECT CAST(${ident(other)} AS UINTEGER) AS ${ident(`${HIDDEN}other`)}, * FROM ${e.table} WHERE ${ident(at)} = ${index} ORDER BY 1`,
             options.signal,
           ),
         ),
@@ -407,12 +411,18 @@ export function graphOf({ engine, vertexTypes, edgeTypes, detach }: Parts): Grap
         const dot = name.indexOf('.');
         const variable = dot < 0 ? name : name.slice(0, dot);
         const el = named.find((x) => x.alias === variable);
-        if (dot < 0 || !el) throw new GraphArError('unknown', `\`${name}\` is not \`variable.property\` of a variable of the pattern`);
+        if (!el || (dot < 0 && el.kind !== 'vertex')) {
+          throw new GraphArError('unknown', `\`${name}\` is not \`variable.property\`, nor a vertex variable, of the pattern`);
+        }
+        if (dot < 0) return { name, variable };
         const property = el.of.properties.find((p) => p.name === name.slice(dot + 1));
         if (!property) throw new GraphArError('unknown', `\`${variable}\` has no property \`${name.slice(dot + 1)}\``);
         return { name, variable, property };
       });
-      const list = columns.map((c) => `${ident(c.variable)}.${ident(c.property.name)} AS ${ident(c.name)}`);
+      const index = (variable: string) => (named.find((x) => x.alias === variable)!.of as VertexType).index;
+      const list = columns.map(
+        (c) => `${ident(c.variable)}.${ident(c.property?.name ?? index(c.variable))} AS ${ident(c.name)}`,
+      );
       return { sql: `SELECT ${list.length === 0 ? 'count(*) AS n' : list.join(', ')} ${from(chain)}`, columns };
     },
 
