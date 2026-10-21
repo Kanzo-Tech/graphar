@@ -30,12 +30,12 @@ pub fn from_turtle(text: &str) -> Result<Shapes, Error> {
     let compiled = IRSchema::compile_with_recursion(&schema, RecursionSemantics::Gfp)
         .map_err(|e| Error::Shapes(e.to_string()))?;
     Ok(super::read(
-        &shapes(&schema),
+        &shapes(&schema)?,
         Document::Shacl(Box::new(compiled)),
     ))
 }
 
-fn shapes(schema: &ASTSchema) -> Vec<Shape> {
+fn shapes(schema: &ASTSchema) -> Result<Vec<Shape>, Error> {
     schema
         .iter()
         .filter_map(|(id, shape)| match shape {
@@ -61,6 +61,9 @@ fn shapes(schema: &ASTSchema) -> Vec<Shape> {
                     ASTComponent::MaxCount(n) => Some(*n),
                     _ => None,
                 });
+                if max == Some(0) {
+                    return Err(super::forbidden(&label(id), pred.as_str()));
+                }
                 if pred.as_str() == RDF_TYPE
                     && let Some(c) = fixed(components)
                 {
@@ -77,11 +80,11 @@ fn shapes(schema: &ASTSchema) -> Vec<Shape> {
                 };
                 properties.push((pred.as_str().to_owned(), target, cardinality));
             }
-            Shape {
+            Ok(Shape {
                 id: label(id),
                 class,
                 properties,
-            }
+            })
         })
         .collect()
 }

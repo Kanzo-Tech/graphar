@@ -15,7 +15,8 @@
 //!   shape no IRI names), of language-tagged strings (`rdf:langString`, `sh:languageIn`), or of
 //!   literals of one datatype (`sh:datatype`).
 //!
-//! It is single-valued when its maximum is 1 and a set otherwise. Anything else a shape says
+//! It is single-valued when its maximum is 1 and a set otherwise. A maximum of 0 forbids the
+//! predicate, and the document is refused: a property the shape forbids has no column. Anything else a shape says
 //! (`sh:or`, inverse and sequence paths, value ranges, patterns, minimums) types nothing: a shape
 //! here only decides where a triple goes, and [`crate::write()`] refuses a graph with a triple
 //! that has no place, which is the closed reading (`sh:closed`, ShEx `CLOSED`) of these shapes.
@@ -35,7 +36,7 @@ pub mod shex;
 use std::collections::HashSet;
 
 use crate::SUBJECT;
-use crate::schema::{Cardinality, Column, EdgeType, Object, Schema, VertexType};
+use crate::schema::{Cardinality, Column, EdgeType, Error, Object, Schema, VertexType};
 use crate::validate::Document;
 
 /// What a property of a shape points at, before the shapes are matched to types.
@@ -145,6 +146,14 @@ fn schema(shapes: &[Shape]) -> (Schema, Vec<String>) {
         });
     }
     (schema, typed.iter().map(|s| s.id.clone()).collect())
+}
+
+/// A property shape whose maximum is 0 (SHACL `sh:maxCount 0`, ShEx `{0,0}`): it forbids the
+/// predicate, and a property the shape forbids has no column.
+pub(crate) fn forbidden(shape: &str, path: &str) -> Error {
+    Error::Shapes(format!(
+        "<{shape}>: the property <{path}> has a maximum of 0: a property the shape forbids has no column"
+    ))
 }
 
 /// An IRI's local name, as a plain identifier.

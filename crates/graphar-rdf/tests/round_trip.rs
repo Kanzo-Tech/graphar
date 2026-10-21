@@ -342,3 +342,28 @@ fn validation_says_why_a_subject_has_no_type() {
         "{reasons:#?}"
     );
 }
+
+#[test]
+fn a_property_the_shape_forbids_is_refused() {
+    let shacl = shapes::shacl::from_turtle(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .
+         @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+         <https://example.org/shapes/Thing> a sh:NodeShape ;
+           sh:property [ sh:path <https://example.org/p> ; sh:datatype xsd:string ; sh:maxCount 0 ] .",
+    );
+    let shex = shapes::shex::from_compact(
+        "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+         <https://example.org/shapes/Thing> { <https://example.org/p> xsd:string {0,0} }",
+    );
+    for (name, refused) in [("SHACL", shacl), ("ShEx", shex)] {
+        let Err(Error::Shapes(reason)) = refused else {
+            panic!("{name}: a property with a maximum of 0 is refused");
+        };
+        assert!(
+            reason.contains("<https://example.org/shapes/Thing>")
+                && reason.contains("<https://example.org/p>")
+                && reason.contains("has no column"),
+            "{name}: {reason}"
+        );
+    }
+}

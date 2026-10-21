@@ -56,10 +56,10 @@ fn compiled(shex: &ShEx) -> Result<Shapes, Error> {
             ValidatorConfig::default().external_resolvers(),
         )
         .map_err(|e| Error::Shapes(e.to_string()))?;
-    Ok(super::read(&shapes(shex), Document::ShEx(Box::new(ir))))
+    Ok(super::read(&shapes(shex)?, Document::ShEx(Box::new(ir))))
 }
 
-fn shapes(shex: &ShEx) -> Vec<Shape> {
+fn shapes(shex: &ShEx) -> Result<Vec<Shape>, Error> {
     let prefixes = shex.prefixmap().unwrap_or_default();
     let iri = |r: &IriRef| resolve(r, &prefixes);
     shex.shapes()
@@ -70,6 +70,9 @@ fn shapes(shex: &ShEx) -> Vec<Shape> {
             let ShapeExpr::Shape(shape) = &decl.shape_expr else {
                 return None;
             };
+            Some((id, shape))
+        })
+        .map(|(id, shape)| {
             let mut constraints = Vec::new();
             if let Some(e) = &shape.expression {
                 flatten(&e.te, &mut constraints);
@@ -94,6 +97,9 @@ fn shapes(shex: &ShEx) -> Vec<Shape> {
                 let Some(predicate) = iri(predicate) else {
                     continue;
                 };
+                if *max == Some(0) {
+                    return Err(super::forbidden(&id, &predicate));
+                }
                 let value = value_expr.as_deref();
                 let values = |value: Option<&ShapeExpr>| match value {
                     Some(ShapeExpr::NodeConstraint(nc)) => nc.values(),
@@ -142,7 +148,7 @@ fn shapes(shex: &ShEx) -> Vec<Shape> {
                 };
                 properties.push((predicate, target, cardinality));
             }
-            Some(Shape {
+            Ok(Shape {
                 id,
                 class,
                 properties,
