@@ -13,7 +13,7 @@ use rudof_rdf::rdf_core::term::Object as Node;
 use rudof_rdf::rdf_core::{Matcher, NeighsRDF, Rdf};
 use rudof_rdf::rdf_impl::{OxigraphInMemory, OxigraphInMemoryError};
 use shacl::ir::{IRSchema, RecursionSemantics};
-use shacl::validator::engine::{Engine, NativeEngine, Validate};
+use shacl::validator::engine::{NativeEngine, Validate};
 use shacl::validator::nodes::FocusNodes;
 use shacl::validator::report::ValidationResult;
 use shex_ast::ir::schema_ir::SchemaIR;
@@ -88,15 +88,6 @@ fn shacl(
     shapes: &[String],
     subjects: &[&str],
 ) -> Result<Failures, Error> {
-    let focus = FocusNodes::new(
-        subjects
-            .iter()
-            .map(|s| Term::NamedNode(NamedNode::new_unchecked(*s)))
-            .collect(),
-    );
-    let mut engine = NativeEngine::new(RecursionSemantics::Gfp);
-    Engine::<OxigraphInMemory>::build_indexes(&mut engine, store)
-        .map_err(|e| Error::Validator(e.to_string()))?;
     shapes
         .iter()
         .map(|id| {
@@ -105,21 +96,38 @@ fn shacl(
                 .iter()
                 .find(|(label, _)| **label == wanted)
                 .ok_or_else(|| Error::Validator(format!("rudof compiled no shape {id}")))?;
-            let outcome = shape
-                .validate(store, &mut engine, Some(&focus), Some(shape), ir)
-                .map_err(|e| Error::Validator(e.to_string()))?;
             let mut failures = BTreeMap::new();
-            for result in outcome.violations() {
-                if let Node::Iri(iri) = result.focus_node() {
-                    failures
-                        .entry(iri.as_str().to_owned())
-                        .or_insert_with(|| said(result));
+            for batch in subjects.chunks(BATCH) {
+                let focus = FocusNodes::new(
+                    batch
+                        .iter()
+                        .map(|s| Term::NamedNode(NamedNode::new_unchecked(*s)))
+                        .collect(),
+                );
+                let mut engine = NativeEngine::new(RecursionSemantics::Gfp);
+                let outcome = shape
+                    .validate(store, &mut engine, Some(&focus), Some(shape), ir)
+                    .map_err(|e| Error::Validator(e.to_string()))?;
+                for result in outcome.violations() {
+                    if let Node::Iri(iri) = result.focus_node() {
+                        failures
+                            .entry(iri.as_str().to_owned())
+                            .or_insert_with(|| said(result));
+                    }
                 }
             }
             Ok(failures)
         })
         .collect()
 }
+
+/// How many focus nodes one SHACL engine validates. The engine memoizes every (node, shape) pair
+/// it decides, property shapes included, with the evidence for it, and frees nothing until it is
+/// dropped: on LUBM at a million triples one engine for every subject and shape outgrew 15.7 GiB.
+/// Whether a node validates against a shape does not depend on the other focus nodes, so an
+/// engine per batch gives the same verdicts, re-deciding only the nodes a batch's references
+/// reach. No class index is built: it serves targets, and the focus nodes are given.
+const BATCH: usize = 4096;
 
 /// A SHACL result as a reader takes it: the path, the validator's message, and the results
 /// beneath it (a value that does not conform to a `sh:node` shape, and why).
