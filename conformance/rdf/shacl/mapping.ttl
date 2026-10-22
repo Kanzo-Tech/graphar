@@ -1,0 +1,69 @@
+@prefix rml: <http://w3id.org/rml/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+
+<#Organization> a rml:TriplesMap ;
+  rml:logicalSource [ rml:source [ a rml:Source ] ; rml:referenceFormulation rml:SQL2008Table ; rml:iterator "\"Organization\"" ] ;
+  rml:subjectMap [ rml:reference "subject" ; rml:termType rml:IRI ; rml:class <https://example.org/Organization> ] ;
+  dct:conformsTo <https://example.org/shapes/Organization> ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/founded> ;
+      rml:objectMap [ rml:reference "founded" ; rml:datatype xsd:int ] ] .
+
+<#Organization/name> a rml:TriplesMap ;
+  rml:logicalSource [ rml:source [ a rml:Source ] ; rml:referenceFormulation rml:SQL2008Query ;
+      rml:iterator "SELECT \"subject\", (\"name\").\"value\" AS \"value\", (\"name\").\"lang\" AS \"lang\" FROM \"Organization\"" ] ;
+  rml:subjectMap [ rml:reference "subject" ; rml:termType rml:IRI ] ;
+  rml:predicateObjectMap [ rml:predicate <https://schema.org/name> ;
+      rml:objectMap [ rml:reference "value" ; rml:languageMap [ rml:reference "lang" ] ] ] .
+
+<#Person> a rml:TriplesMap ;
+  rml:logicalSource [ rml:source [ a rml:Source ] ; rml:referenceFormulation rml:SQL2008Table ; rml:iterator "\"Person\"" ] ;
+  rml:subjectMap [ rml:reference "subject" ; rml:termType rml:IRI ; rml:class <https://example.org/Person> ] ;
+  dct:conformsTo <https://example.org/shapes/Person> ;
+  rml:predicateObjectMap [ rml:predicate <http://xmlns.com/foaf/0.1/name> ;
+      rml:objectMap [ rml:reference "name" ] ] ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/active> ;
+      rml:objectMap [ rml:reference "active" ; rml:datatype xsd:boolean ] ] ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/age> ;
+      rml:objectMap [ rml:reference "age" ; rml:datatype xsd:integer ] ] ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/born> ;
+      rml:objectMap [ rml:reference "born" ; rml:datatype xsd:date ] ] ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/homepage> ;
+      rml:objectMap [ rml:reference "homepage" ; rml:termType rml:IRI ] ] ;
+  rml:predicateObjectMap [ rml:predicate <https://schema.org/name> ;
+      rml:objectMap [ rml:reference "name_2" ] ] .
+
+<#Person/motto> a rml:TriplesMap ;
+  rml:logicalSource [ rml:source [ a rml:Source ] ; rml:referenceFormulation rml:SQL2008Query ;
+      rml:iterator "SELECT \"subject\", (\"motto\").\"value\" AS \"value\", (\"motto\").\"lang\" AS \"lang\" FROM \"Person\"" ] ;
+  rml:subjectMap [ rml:reference "subject" ; rml:termType rml:IRI ] ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/motto> ;
+      rml:objectMap [ rml:reference "value" ; rml:languageMap [ rml:reference "lang" ] ] ] .
+
+<#Person/nick> a rml:TriplesMap ;
+  rml:logicalSource [ rml:source [ a rml:Source ] ; rml:referenceFormulation rml:SQL2008Query ;
+      rml:iterator "SELECT t.\"subject\", (t.n).\"value\" AS \"value\", (t.n).\"lang\" AS \"lang\" FROM (SELECT \"subject\", unnest(\"nick\") AS n FROM \"Person\") AS t" ] ;
+  rml:subjectMap [ rml:reference "subject" ; rml:termType rml:IRI ] ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/nick> ;
+      rml:objectMap [ rml:reference "value" ; rml:languageMap [ rml:reference "lang" ] ] ] .
+
+<#Person/tag> a rml:TriplesMap ;
+  rml:logicalSource [ rml:source [ a rml:Source ] ; rml:referenceFormulation rml:SQL2008Query ;
+      rml:iterator "SELECT \"subject\", unnest(\"tag\") AS \"value\" FROM \"Person\"" ] ;
+  rml:subjectMap [ rml:reference "subject" ; rml:termType rml:IRI ] ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/tag> ;
+      rml:objectMap [ rml:reference "value" ] ] .
+
+<#Person_knows_Person> a rml:TriplesMap ;
+  rml:logicalSource [ rml:source [ a rml:Source ] ; rml:referenceFormulation rml:SQL2008Query ;
+      rml:iterator "SELECT s.\"subject\" AS \"source\", d.\"subject\" AS \"target\" FROM \"Person_knows_Person\" AS e JOIN \"Person\" AS s ON e.\"_graphArSrcIndex\" = s.\"_graphArVertexIndex\" JOIN \"Person\" AS d ON e.\"_graphArDstIndex\" = d.\"_graphArVertexIndex\"" ] ;
+  rml:subjectMap [ rml:reference "source" ; rml:termType rml:IRI ] ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/knows> ;
+      rml:objectMap [ rml:reference "target" ; rml:termType rml:IRI ] ] .
+
+<#Person_worksFor_Organization> a rml:TriplesMap ;
+  rml:logicalSource [ rml:source [ a rml:Source ] ; rml:referenceFormulation rml:SQL2008Query ;
+      rml:iterator "SELECT s.\"subject\" AS \"source\", d.\"subject\" AS \"target\" FROM \"Person_worksFor_Organization\" AS e JOIN \"Person\" AS s ON e.\"_graphArSrcIndex\" = s.\"_graphArVertexIndex\" JOIN \"Organization\" AS d ON e.\"_graphArDstIndex\" = d.\"_graphArVertexIndex\"" ] ;
+  rml:subjectMap [ rml:reference "source" ; rml:termType rml:IRI ] ;
+  rml:predicateObjectMap [ rml:predicate <https://example.org/worksFor> ;
+      rml:objectMap [ rml:reference "target" ; rml:termType rml:IRI ] ] .

@@ -10,18 +10,39 @@ repository = "https://github.com/Kanzo-Tech/graphar"
 
 [workspace.dependencies]
 graphar-info = { path = "crates/graphar-info", version = "0.1.0-alpha.1" }
+graphar-parquet = { path = "crates/graphar-parquet", version = "0.1.0-alpha.1" }
+graphar-rdf = { path = "crates/graphar-rdf", version = "0.1.0-alpha.1" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
 thiserror = "2"
-# Arrow and Parquet at the major fossil links, so one copy reaches its build.
-arrow-array = "58"
-arrow-schema = "58"
-arrow-select = "58"
+# Arrow and Parquet 60: the first `parquet` whose Arrow writer counts `distinct_count`. fossil links
+# 58 through DataFusion 54 and moves when a DataFusion release is on 60.
+arrow-array = "60"
+arrow-schema = "60"
+arrow-select = "60"
+# Every value as text, for the commonest values and the RDF lexical forms.
+arrow-cast = { version = "60", default-features = false }
+serde_json = "1"
+# RDF terms and Turtle/N-Triples, from Oxigraph: published, no runtime, and they build for wasm32.
+oxrdf = "0.3"
+oxttl = "0.2"
+# Shape documents, read by rudof as published: `shacl` and `rudof_rdf` without `sparql`, whose
+# `reqwest` and `tokio` do not build for wasm32. Natively `rudof_rdf` still links Oxigraph and
+# `tokio`; neither reaches the wasm32 build.
+shex_ast = "0.3.29"
+shex_validation = "0.3.29"
+shacl = { version = "0.3.29", default-features = false }
+rudof_rdf = { version = "0.3.29", default-features = false }
+rudof_iri = "0.3.29"
+prefixmap = "0.3.29"
 # `arrow` only: a compression codec is the consumer's to turn on (`parquet/zstd`, …), and
 # `async`/`object_store` are off because both bring `tokio` into the wasm32 build.
-parquet = { version = "58", default-features = false, features = ["arrow"] }
+parquet = { version = "60", default-features = false, features = ["arrow"] }
 # No default features: `fs` and every cloud store bring `tokio`. The store is the caller's.
-object_store = { version = "0.13", default-features = false }
+object_store = { version = "0.14", default-features = false }
+# `Stream`, which `graphar-rdf`'s writer reads its triples from: `object_store` already links it, and
+# without `std`'s executor features it reaches no runtime.
+futures-util = { version = "0.3", default-features = false }
 bytes = "1"
 
 [workspace.lints.rust]

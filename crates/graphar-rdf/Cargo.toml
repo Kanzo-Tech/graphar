@@ -1,0 +1,45 @@
+[package]
+name = "graphar-rdf"
+version = "0.1.0-alpha.1"
+description = "RDF in Apache GraphAr: an RDF graph that conforms to its shapes (SHACL, ShEx) as a table per shape, holding the nodes that validate against it, and an edge type per property between shapes, and its RDF reading as an RML-Core mapping. Builds for wasm32."
+keywords = ["graphar", "rdf", "rml", "shacl", "parquet"]
+categories = ["data-structures", "encoding", "wasm"]
+readme = "../../README.md"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+graphar-info.workspace = true
+graphar-parquet.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+arrow-cast.workspace = true
+arrow-select.workspace = true
+parquet.workspace = true
+object_store.workspace = true
+futures-util.workspace = true
+oxrdf.workspace = true
+oxttl.workspace = true
+shex_ast.workspace = true
+shex_validation.workspace = true
+shacl.workspace = true
+rudof_rdf.workspace = true
+rudof_iri.workspace = true
+prefixmap.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+# `fs` for the example that writes a graph to a directory.
+object_store = { workspace = true, features = ["fs"] }
+
+[lints]
+workspace = true
+
+# `oxrdf` draws a fresh blank node from `rand`, whose `getrandom` has no source on
+# wasm32-unknown-unknown but the browser's: `wasm_js`, with the `getrandom_backend` cfg in
+# `.cargo/config.toml` (a host that builds for wasm32 sets the same cfg, as fossil does).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }

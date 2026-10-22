@@ -14,8 +14,8 @@ use parquet::file::properties::WriterProperties;
 /// this crate knows any name.
 pub type UserTypes = BTreeMap<String, Arrow>;
 
-/// How the writers write: Parquet's [`WriterProperties`] (the codec, the row groups: a codec is a
-/// feature of `parquet` the caller turns on) and the Arrow type of each user-defined type.
+/// How the writers write: Parquet's [`WriterProperties`] (the codec: a feature of `parquet` the
+/// caller turns on) and the Arrow type of each user-defined type.
 #[derive(Clone, Debug, Default)]
 pub struct Options {
     /// Parquet's own writer settings, as `ParquetObjectWriter` takes them.

@@ -1,12 +1,13 @@
 name: release
 
-# Publishes when a GitHub Release is published: `graphar-info` then `graphar-parquet` to crates.io,
+# Publishes when a GitHub Release is published: `graphar-info`, `graphar-parquet` and
+# `graphar-rdf` to crates.io,
 # and `@kanzo-tech/graphar-duckdb` to npm. The release is the decision, made by a person, and this
 # workflow only carries it out: no version PR, no CHANGELOG. The release body is the release notes.
 #
 # THE TAG DECIDES THE VERSION, and `check` refuses a tag that disagrees with the committed
 # versions: `v0.1.0-alpha.0` needs every Cargo.toml and package.json at `0.1.0-alpha.0`. Bump them
-# in a commit, merge it, then tag that commit. All three artifacts share one version.
+# in a commit, merge it, then tag that commit. Every artifact shares one version.
 #
 # A prerelease tag (`v0.2.0-rc.1`) publishes to npm under its identifier as the dist-tag (`rc`),
 # so `latest` stays where it was. crates.io has no dist-tags; a prerelease version is skipped by
@@ -47,7 +48,7 @@ jobs:
             echo "  $name $found"
             [ "$found" = "$version" ] || { echo "$name is $found, the tag says $version" >&2; bad=1; }
           done < <(cargo metadata --no-deps --format-version 1 \
-                     | jq -r '.packages[] | [.name, .version] | @tsv')
+                     | jq -r '.packages[] | select(.publish != []) | [.name, .version] | @tsv')
           for manifest in packages/*/package.json; do
             [ "$(jq -r '.private // false' "$manifest")" = "true" ] && continue
             name="$(jq -r .name "$manifest")"; found="$(jq -r .version "$manifest")"
@@ -76,6 +77,10 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
       - name: Publish graphar-parquet
         run: cargo publish -p graphar-parquet --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      - name: Publish graphar-rdf
+        run: cargo publish -p graphar-rdf --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
 

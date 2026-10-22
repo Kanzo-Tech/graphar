@@ -22,8 +22,8 @@ use graphar_info::{
     Property, PropertyGroup, VertexInfo,
 };
 use graphar_parquet::{
-    DST_INDEX_COL, Error, Options, SRC_INDEX_COL, UserTypes, write_edges, write_info,
-    write_vertices,
+    DST_INDEX_COL, Error, Options, SRC_INDEX_COL, UserTypes, write_edge_vertex_count, write_edges,
+    write_info, write_vertex_count, write_vertices,
 };
 use object_store::{ObjectStore, path::Path};
 
@@ -299,52 +299,60 @@ pub fn created_rows() -> RecordBatch {
 
 /// Writes the whole sample under `root`, the graph document last.
 pub async fn write(store: &dyn ObjectStore, root: &Path) -> Result<(), Error> {
-    write_vertices(
+    let n = write_vertices(
         store,
         root,
         &person(),
+        0,
         &[person_rows()],
         &Options::default(),
     )
     .await?;
-    write_vertices(
+    write_vertex_count(store, root, &person(), n).await?;
+    let n = write_vertices(
         store,
         root,
         &software(),
+        0,
         &[software_rows()],
         &Options::default(),
     )
     .await?;
-    write_vertices(
+    write_vertex_count(store, root, &software(), n).await?;
+    let n = write_vertices(
         store,
         root,
         &nickname(),
+        0,
         &[nickname_rows()],
         &Options::default(),
     )
     .await?;
+    write_vertex_count(store, root, &nickname(), n).await?;
     for adj in [AdjListType::OrderedBySource, AdjListType::UnorderedByDest] {
         write_edges(
             store,
             root,
             &knows(),
             adj,
-            7,
+            0..7,
             &[knows_rows()],
             &Options::default(),
         )
         .await?;
+        write_edge_vertex_count(store, root, &knows(), adj, 7).await?;
     }
     write_edges(
         store,
         root,
         &created(),
         AdjListType::OrderedBySource,
-        7,
+        0..7,
         &[created_rows()],
         &Options::default(),
     )
     .await?;
+    write_edge_vertex_count(store, root, &created(), AdjListType::OrderedBySource, 7).await?;
     write_info(store, root, &graph()).await
 }
 
@@ -443,10 +451,11 @@ pub fn concept_rows() -> RecordBatch {
 
 /// Writes the `user_defined` graph under `root`, the graph document last.
 pub async fn write_user_defined(store: &dyn ObjectStore, root: &Path) -> Result<(), Error> {
-    write_vertices(
+    let n = write_vertices(
         store,
         root,
         &concept(),
+        0,
         &[concept_rows()],
         &Options {
             user_types: user_types(),
@@ -454,5 +463,6 @@ pub async fn write_user_defined(store: &dyn ObjectStore, root: &Path) -> Result<
         },
     )
     .await?;
+    write_vertex_count(store, root, &concept(), n).await?;
     write_info(store, root, &user_defined_graph()).await
 }

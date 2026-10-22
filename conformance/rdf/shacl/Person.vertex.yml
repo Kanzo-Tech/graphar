@@ -1,0 +1,50 @@
+type: Person
+chunk_size: 2
+prefix: vertex/Person/
+property_groups:
+  - prefix: properties/
+    file_type: parquet
+    properties:
+      - name: subject
+        data_type: string
+        is_primary: true
+        is_nullable: false
+      - name: name
+        data_type: string
+        is_primary: false
+        is_nullable: true
+      - name: active
+        data_type: bool
+        is_primary: false
+        is_nullable: true
+      - name: age
+        data_type: int64
+        is_primary: false
+        is_nullable: true
+      - name: born
+        data_type: date
+        is_primary: false
+        is_nullable: true
+      - name: homepage
+        data_type: string
+        is_primary: false
+        is_nullable: true
+      - name: motto
+        data_type: langString
+        is_primary: false
+        is_nullable: true
+      - name: nick
+        data_type: langString
+        is_primary: false
+        is_nullable: true
+        cardinality: set
+      - name: tag
+        data_type: string
+        is_primary: false
+        is_nullable: true
+        cardinality: set
+      - name: name_2
+        data_type: string
+        is_primary: false
+        is_nullable: true
+version: gar/v1 (langString)

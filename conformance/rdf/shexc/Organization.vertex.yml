@@ -1,0 +1,20 @@
+type: Organization
+chunk_size: 2
+prefix: vertex/Organization/
+property_groups:
+  - prefix: properties/
+    file_type: parquet
+    properties:
+      - name: subject
+        data_type: string
+        is_primary: true
+        is_nullable: false
+      - name: founded
+        data_type: int32
+        is_primary: false
+        is_nullable: true
+      - name: name
+        data_type: langString
+        is_primary: false
+        is_nullable: true
+version: gar/v1 (langString)

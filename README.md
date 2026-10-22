@@ -8,8 +8,9 @@ builds for `wasm32-unknown-unknown`.
 | crate | what it is |
 | --- | --- |
 | [`graphar-info`](crates/graphar-info) | The information files: `GraphInfo`, `VertexInfo`, `EdgeInfo` and their parts, loaded from and dumped to YAML, and validated. No IO of its own |
-| [`graphar-parquet`](crates/graphar-parquet) | The data files in Parquet: vertex chunks, adjacency lists, offsets, edge properties and the count files, written and read through any [`object_store`](https://docs.rs/object_store). No runtime: its wasm32 build reaches no `tokio` |
-| [`@kanzo-tech/graphar-duckdb`](packages/graphar-duckdb) (npm) | `attachGraph`: a graph on a host's DuckDB as a catalog, a view per vertex and edge type over the Parquet chunks, and the information files as `graphar_vertex_types`, `graphar_edge_types`, `graphar_properties`, `graphar_extra_info` and `graphar_chunks` (every chunk file, by the name the host resolved it to). TypeScript only: every file is read through the engine |
+| [`graphar-parquet`](crates/graphar-parquet) | The data files in Parquet: vertex chunks, adjacency lists, offsets, edge properties and the count files, written and read through any [`object_store`](https://docs.rs/object_store), each chunk one row group whose Parquet `Statistics` carry its distinct counts. No runtime: its wasm32 build reaches no `tokio` |
+| [`graphar-rdf`](crates/graphar-rdf) | RDF in GraphAr: an RDF graph and its shapes (SHACL Core in Turtle, ShEx in ShExC or ShExJ, read by [rudof](https://github.com/rudof-project/rudof)) written as a vertex table per shape (the nodes that validate against it) and an edge type per property between shapes, with the RDF reading of those tables as a plan in the mapping algebra of Min Oo and Hartig, written as RML-Core (`mapping.ttl`) and R2RML (`mapping.r2rml.ttl`). Only a graph that conforms to the closed reading of its shapes is written; `read` gives back the triples written, up to canonical lexical form |
+| [`@kanzo-tech/graphar-duckdb`](packages/graphar-duckdb) (npm) | `attachGraph`: a graph on a host's DuckDB, read through a `Graph` — its types and their properties with each one's statistics, a vertex, the edges of a type, the edges at a vertex, search, common values, and patterns across types as SQL (`match`, and `reach`, a filter on one type carried to another) — over a catalog of a view per vertex and edge type over the Parquet chunks, and the information files as `graphar_vertex_types`, `graphar_edge_types`, `graphar_properties`, `graphar_extra_info` and `graphar_chunks` (every chunk file, by the name the host resolved it to), and `graphar_column_stats`, each property's nulls, bounds and distinct count combined from its chunks' Parquet `Statistics`. `attachRdfGraph`: a graph `graphar-rdf` wrote, read through an `RdfGraph` — each type, property and edge type with its IRI, term type and datatype from `mapping.ttl`, its labels from the saved shapes, and `triples()`, the mapping evaluated on the host's DuckDB. TypeScript only: every file is read through the engine |
 
 They are tested against every information file and the Parquet data of
 [incubator-graphar-testing](https://github.com/apache/incubator-graphar-testing), and
@@ -21,8 +22,11 @@ let graph = graphar_info::GraphInfo::load_file("ldbc_sample.graph.yml")?;
 graph.validate()?;
 for (file, yaml) in graph.dump()? { /* write it */ }
 
-// a vertex type's table, then the graph's documents, the graph document last
-graphar_parquet::write_vertices(&store, &root, &graph.vertices[0], &batches, &props).await?;
+// a vertex type's chunks from chunk 0 (or one chunk at a time), its count, then the graph's
+// documents, the graph document last
+let vertex = &graph.vertices[0];
+let n = graphar_parquet::write_vertices(&store, &root, vertex, 0, &batches, &options).await?;
+graphar_parquet::write_vertex_count(&store, &root, vertex, n).await?;
 graphar_parquet::write_info(&store, &root, &graph).await?;
 ```
 
@@ -53,14 +57,78 @@ to open the graph writes such a value as `string`, since neither C++ nor Java ac
 it: it refuses it, and the check fails the day C++ opens it. `conformance/sample/`, which C++ opens
 and reads, has no such column.
 
+## RDF
+
+`graphar-rdf` writes an RDF graph that conforms to the closed reading of its shapes (`sh:closed`,
+ShEx `CLOSED`): every subject an IRI that validates against exactly one shape, and every triple a
+value of one of that shape's properties or an edge to a node of the shape it names, with
+`sh:maxCount 1` respected. A node's type is the shape it validates against, not its `rdf:type`,
+which is a predicate like any other; a shape that fixes it to one class has it written as the
+triples map's `rml:class`. The typing is rudof's validator's maximal valid shape map
+(`Typing::Validate`), or one the caller states and vouches for (`Typing::Assume`). Any other graph
+is refused, with the subject and the validator's reasons, or the first triple that has no place and
+why, and is not committed: the information files are written last, and only once every triple has
+its place. A literal is stored as its value, so `"031"^^xsd:integer` reads
+back as `"31"^^xsd:integer`. The reading is one plan in the mapping algebra of Min Oo and Hartig
+(ESWC 2025), which `read` evaluates and which is written twice: as RML-Core, with the language of a
+tagged string read per row, and as R2RML, whose language is a constant, with a triples map per
+language the column holds. Both delimit every SQL identifier and write standard SQL, and
+[`conformance/rml/run.py`](conformance/rml/run.py) runs both in CI through Morph-KGC on DuckDB and
+PostgreSQL and RMLMapper on PostgreSQL, against the triples written. One defect of RMLMapper 8.1.0
+is explained rather than hidden there: booleans read from PostgreSQL as `t`/`f`. And
+[`conformance/rml/algemaploom.py`](conformance/rml/algemaploom.py) checks that AlgeMapLoom
+(RMLio/mappingloom-rs) translates `mapping.ttl` into the same plan: a pipeline per triples map, over
+its source, writing its triples.
+
+`write` takes the triples as a stream grouped by subject — each subject's triples together, in any
+order of subjects — and refuses a subject that reappears; `grouped` groups triples held in memory,
+subjects in IRI order. Under `Typing::Assume` it streams: each subject is typed as it arrives, its
+row is the next of its type, and a chunk is written as soon as it fills, through `graphar-parquet`'s
+`write_vertices` and `write_edges` a chunk and a part at a time. It holds what GraphAr's layout
+forces: every subject's IRI with its type and row (an adjacency list holds the destination's row,
+and an edge may name a subject before its triples arrive), the open chunk of each vertex type, the
+edges from each chunk of sources until the chunk is written and all their destinations have
+arrived, and one subject's triples. That is O(subjects + types × `chunk_size`) when destinations
+come first, and each forward reference holds the part it is in until its destination arrives; an
+edge whose destination never does is refused at the end. A row's internal id is its arrival order
+within its type (it used to be IRI order, which a stream in IRI order still gives, byte for byte).
+A refused stream leaves the full chunks and parts it wrote, with no count file, mapping or
+information file, and nothing deletes them: write into an empty root. Under `Typing::Validate` it
+does not stream: rudof validates the graph in memory, so the writer holds every triple and types
+every subject first.
+
+Mapping and shapes are each their own file. The mapping is RML-Core (and R2RML) and says only how
+each table and column becomes triples; each vertex type's triples map adds one statement,
+`dct:conformsTo` its shape, which generates no triple and is what the typing guaranteed of every
+row. Under `Typing::Validate` the writer saves the shape document beside the graph exactly as it
+read it, as `shapes.ttl` (SHACL in Turtle), `shapes.shex` (ShExC) or `shapes.shexj` (ShExJ), and
+the graph document's `extra_info` names it under the key `shapes`; under `Typing::Assume` there is
+none. Labels and descriptions are the shapes' (`sh:name`, `sh:description`; in ShExJ, `rdfs:label`
+and `rdfs:comment` annotations) and are read from there: without shapes there are no labels, and a
+consumer shows an IRI's local name. A triples map is named by the GraphAr names it reads:
+`<#Person>`, `<#Person/nick>`, `<#Person_knows_Person>`.
+
+`@kanzo-tech/graphar-duckdb`'s `attachRdfGraph` reads such a graph back. It attaches it as
+`attachGraph` does, and refuses one without `mapping.ttl`. It parses the mapping with N3.js, reads only
+the RML-Core subset `graphar-rdf` writes, refuses anything else, and matches each triples map to
+its type, column or edge type by its name, never by its SQL. Each vertex type has `iri` (the class
+its shape fixes) and `shape`, each property `iri` (the predicate), `termType` and `datatype`, and
+each edge type `iri`, each with the `label` and `description` its shapes give. Those come from
+`sh:name` and `sh:description` in SHACL, or the `rdfs:label` and `rdfs:comment` annotations in
+ShExJ, preferring the untagged literal, then `en`; ShExC gives none, since there is no ShExC parser
+here. `triples()` runs each triples map's logical source on the host's DuckDB, with the mapping's
+table names bound to the graph's views as the statement's own common table expressions. It gives
+back `people.ttl`'s triples up to canonical lexical form: `conformance/rdf` holds the three graphs
+the example writes from it, and CI checks they are exactly what the writer writes today.
+
 ## Releasing
 
 A release is a GitHub Release, and its body is the release notes: there is no CHANGELOG. The tag
-decides the version and all three artifacts share it (`graphar-info`, `graphar-parquet`,
-`@kanzo-tech/graphar-duckdb`).
+decides the version and every artifact shares it (`graphar-info`, `graphar-parquet`,
+`graphar-rdf`, `@kanzo-tech/graphar-duckdb`).
 
-1. In one commit, set `version` in both `crates/*/Cargo.toml` and in `packages/*/package.json` (and
-   `graphar-info`'s version in `graphar-parquet`'s dependency in the root `Cargo.toml`), then merge it.
+1. In one commit, set `version` in every `crates/*/Cargo.toml` and in `packages/*/package.json` (and
+   the versions of the path dependencies in the root `Cargo.toml`), then merge it.
 2. Publish a GitHub Release tagged `v<version>` on that commit (`v0.1.0-alpha.0`; a prerelease tag
    publishes to npm under its identifier as the dist-tag).
 3. `.github/workflows/release.yml` checks the tag against every manifest, runs the whole CI chain on

@@ -27,7 +27,12 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked --no-fail-fast
       - name: wasm32
-        run: cargo check --target wasm32-unknown-unknown -p graphar-info -p graphar-parquet --locked
+        # RUSTFLAGS replaces .cargo/config.toml's target rustflags, so the getrandom cfg is here too.
+        env:
+          RUSTFLAGS: -D warnings --cfg getrandom_backend="wasm_js"
+        run: >-
+          cargo check --target wasm32-unknown-unknown --locked
+          -p graphar-info -p graphar-parquet -p graphar-rdf
       - name: no tokio in the wasm32 build
         run: |
           if cargo tree --target wasm32-unknown-unknown -e normal --workspace --locked --prefix none \
@@ -48,15 +53,63 @@ jobs:
           GRAPHAR_TESTING: ${{ github.workspace }}/incubator-graphar-testing
         run: cargo test -p graphar-parquet --locked --test testing_data -- --ignored
       # conformance/{sample,user_defined} are what the C++ reader below and graphar-duckdb's tests
-      # open, and they are exactly what the writer writes today.
+      # open, and conformance/rdf what attachRdfGraph's tests open: exactly what the writers write
+      # today, the RDF graphs from people.ttl and each of its three shape documents.
       - name: conformance graphs are the writer's
         run: |
-          rm -rf conformance/sample conformance/user_defined
+          rm -rf conformance/sample conformance/user_defined conformance/rdf
           cargo run -p graphar-parquet --example sample --locked -- conformance
+          d=crates/graphar-rdf/tests/data
+          cargo run -p graphar-rdf --example write --locked -- $d/people.shacl.ttl $d/people.ttl conformance/rdf/shacl 2
+          cargo run -p graphar-rdf --example write --locked -- $d/people.shex $d/people.ttl conformance/rdf/shexc 2
+          cargo run -p graphar-rdf --example write --locked -- $d/people.shex.json $d/people.ttl conformance/rdf/shexj 2
           git add -N conformance
           git diff --exit-code --stat -- conformance
 
-  # graphar-duckdb, tested on a native DuckDB against conformance/sample.
+  # graphar-rdf's two mappings, RML-Core and R2RML, run by two processors on two engines: Morph-KGC on DuckDB and PostgreSQL,
+  # RMLMapper on PostgreSQL. Each must give back exactly the triples the graph was written from.
+  interop:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: pip install duckdb==1.5.6 rdflib==7.2.1 morph-kgc==2.10.0 duckdb-engine==0.17.0 psycopg2-binary==2.9.13
+      - name: RMLMapper
+        run: curl -sSfL -o rmlmapper.jar https://github.com/RMLio/rmlmapper-java/releases/download/v8.1.0/rmlmapper-8.1.0-r380-all.jar
+      - name: the mappings on Morph-KGC and RMLMapper
+        run: |
+          d=crates/graphar-rdf/tests/data
+          cargo run -q -p graphar-rdf --example write --locked -- $d/people.shacl.ttl $d/people.ttl people 2
+          python3 -I conformance/rml/run.py people $d/people.ttl \
+            --pg "host=127.0.0.1 port=5432 user=postgres password=postgres" --rmlmapper rmlmapper.jar
+      # AlgeMapLoom is not on crates.io: its translator is built at a pinned commit, on its own
+      # toolchain.
+      - name: AlgeMapLoom
+        run: |
+          git clone -q https://github.com/RMLio/mappingloom-rs "$RUNNER_TEMP/mappingloom-rs"
+          cd "$RUNNER_TEMP/mappingloom-rs"
+          git checkout -q 9e3f4093ecf4a34f438b2263b2e72f686ba0faed
+          rustup toolchain install 1.87.0 --profile minimal
+          cargo +1.87.0 build -q --release --locked -p translator --bin translator-bin
+      - name: the plan of mapping.ttl as AlgeMapLoom translates it
+        run: python3 -I conformance/rml/algemaploom.py people "$RUNNER_TEMP/mappingloom-rs/target/release/translator-bin"
+
+  # graphar-duckdb, tested on a native DuckDB against conformance/sample and conformance/rdf.
   node:
     runs-on: ubuntu-latest
     steps:

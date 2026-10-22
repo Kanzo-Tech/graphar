@@ -1,22 +1,28 @@
-export {
-  attachGraph,
-  DST_INDEX_COL,
-  SRC_INDEX_COL,
-  VERTEX_INDEX_COL,
-  type AttachOptions,
-  type Engine,
-  type GraphAttachment,
-  type Resolve,
-  type Table,
-} from './attach.js';
+export { attachGraph, type AttachOptions, type Engine, type Resolve, type Table } from './attach.js';
 export { GraphArError, type GraphArErrorCode } from './error.js';
+export type {
+  Column,
+  EdgePattern,
+  EdgeType,
+  Graph,
+  Match,
+  Neighbour,
+  Pattern,
+  Property,
+  Signal,
+  Stats,
+  Value,
+  VertexPattern,
+  VertexType,
+} from './graph.js';
 export {
-  edgeName,
-  type AdjacentList,
-  type AdjListType,
-  type EdgeInfo,
-  type GraphInfo,
-  type Property,
-  type PropertyGroup,
-  type VertexInfo,
-} from './info.js';
+  attachRdfGraph,
+  MAPPING_FILE,
+  SHAPES_KEY,
+  type Labelled,
+  type RdfEdgeType,
+  type RdfGraph,
+  type RdfProperty,
+  type RdfVertexType,
+  type Shapes,
+} from './rdf.js';

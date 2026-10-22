@@ -1,6 +1,7 @@
 //! The writers: C++ `VertexPropertyWriter` and `EdgeChunkWriter` (`arrow/chunk_writer.cc`), with
 //! what C++'s `EdgesBuilder::Dump` adds — a count and an offset chunk for every part, empty or not.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, Int64Array, RecordBatch, UInt64Array};
@@ -10,7 +11,8 @@ use graphar_info::{
     AdjListType, EdgeInfo, FileType, GraphInfo, Property, PropertyGroup, VertexInfo,
 };
 use object_store::{ObjectStore, PutOptions, PutPayload, path::Path};
-use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 
 use crate::error::{Error, invalid};
 use crate::types::{Options, UserTypes, holds_property};
@@ -56,9 +58,23 @@ async fn put_parquet(
     batch: &RecordBatch,
     props: &WriterProperties,
 ) -> Result<(), Error> {
-    let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props.clone()))?;
+    let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(counted(props, batch)))?;
     writer.write(batch)?;
     put(store, root, relative, writer.into_inner()?).await
+}
+
+/// The caller's settings, with a chunk written as one row group whose `Statistics` carry
+/// `distinct_count` beside the nulls and bounds Parquet always counts. Parquet's statistics are per
+/// row group, so one group per chunk makes them the chunk's, and a reader combines chunks into a
+/// table's without opening a page.
+fn counted(props: &WriterProperties, batch: &RecordBatch) -> WriterProperties {
+    props
+        .clone()
+        .into_builder()
+        .set_max_row_group_row_count(Some(batch.num_rows().max(1)))
+        .set_max_row_group_bytes(None)
+        .set_write_row_group_number_distinct_values(true)
+        .build()
 }
 
 fn parquet_only(at: impl Into<String>, file_type: FileType) -> Result<(), Error> {
@@ -137,21 +153,28 @@ fn chunks(count: u64, chunk_size: u64) -> u64 {
     count.div_ceil(chunk_size)
 }
 
-/// **Writes a vertex type's logical table**: every chunk of every property group, then the type's
-/// `vertex_count`, and returns that count.
+/// **Writes vertex chunks of a vertex type**, starting at chunk `start_chunk`, and returns the
+/// number of vertices written. C++ `VertexPropertyWriter::WriteTable(input_table,
+/// start_chunk_index)`.
 ///
-/// The rows of `batches` are the vertices in order, so a vertex's internal id is its row. A batch
-/// holds a column per property, by name; other columns are not read. Each chunk of each group is
-/// `_graphArVertexIndex` (`int64`, the id) then the group's properties, in the information file's
-/// order and nullability. A property's column must hold its GraphAr type, and one that is not
-/// nullable must hold no null. A property of a user-defined type (`gar/v1 (langString)`) must be
-/// held by the Arrow type `options.user_types` gives its name, which GraphAr does not define.
+/// The rows of `batches` are the vertices from `start_chunk * chunk_size` on, in order, so a
+/// vertex's internal id is its type's first id here plus its row. They are cut into chunks of
+/// `chunk_size` rows, chunk `start_chunk` first; only the last may be shorter, and a later call
+/// must not start inside it. One call with `start_chunk` 0 writes a whole table, and a writer
+/// that holds one chunk at a time calls it once per chunk. A batch holds a column per property, by
+/// name; other columns are not read. Each chunk of each group is `_graphArVertexIndex` (`int64`,
+/// the id) then the group's properties, in the information file's order and nullability. A
+/// property's column must hold its GraphAr type, and one that is not nullable must hold no null.
+/// A property of a user-defined type (`gar/v1 (langString)`) must be held by the Arrow type
+/// `options.user_types` gives its name, which GraphAr does not define.
 ///
-/// It writes no information file: [`write_info`] does, once every table is written.
+/// It writes neither the type's count, which [`write_vertex_count`] writes once every chunk is,
+/// nor an information file: [`write_info`] does, once every table is written.
 pub async fn write_vertices(
     store: &dyn ObjectStore,
     root: &Path,
     info: &VertexInfo,
+    start_chunk: u64,
     batches: &[RecordBatch],
     options: &Options,
 ) -> Result<u64, Error> {
@@ -166,11 +189,19 @@ pub async fn write_vertices(
     for group in &info.property_groups {
         checked.push(group_columns(&at, &table, group, &options.user_types)?);
     }
+    let first = start_chunk
+        .checked_mul(info.chunk_size)
+        .filter(|first| {
+            first
+                .checked_add(count)
+                .is_some_and(|end| end <= i64::MAX as u64)
+        })
+        .ok_or_else(|| invalid(&at, "an id above i64::MAX"))?;
     for k in 0..chunks(count, info.chunk_size) {
         let begin = k * info.chunk_size;
         let len = info.chunk_size.min(count - begin);
         let ids: ArrayRef = Arc::new(Int64Array::from_iter_values(
-            (begin..begin + len).map(|i| i as i64),
+            (first + begin..first + begin + len).map(|i| i as i64),
         ));
         for (group, columns) in info.property_groups.iter().zip(&checked) {
             let mut chunk = vec![(index_field(VERTEX_INDEX_COL), ids.clone())];
@@ -179,19 +210,36 @@ pub async fn write_vertices(
                     (field.clone(), array.slice(begin as usize, len as usize))
                 }),
             );
-            let path = paths::vertex_chunk(info, group, k);
-            put_parquet(store, root, &path, &batch_of(chunk)?, &options.props).await?;
+            let path = paths::vertex_chunk(info, group, start_chunk + k);
+            let batch = batch_of(chunk)?;
+            put_parquet(store, root, &path, &batch, &options.props).await?;
         }
     }
-    put_count(store, root, &paths::vertex_count(info), count).await?;
     Ok(count)
 }
 
-/// **Writes one adjacency list of an edge type**, with its property groups, and returns the
-/// number of edges.
+/// **Writes a vertex type's count**, `vertex_count`: the number of its vertices, once their
+/// chunks are written. C++ `VertexPropertyWriter::WriteVerticesNum`.
+pub async fn write_vertex_count(
+    store: &dyn ObjectStore,
+    root: &Path,
+    info: &VertexInfo,
+    count: u64,
+) -> Result<(), Error> {
+    put_count(store, root, &paths::vertex_count(info), count).await
+}
+
+/// **Writes the parts of one adjacency list of an edge type** that `vertices` covers, with their
+/// property groups, and returns the number of edges written. C++
+/// `EdgeChunkWriter::SortAndWriteAdjListTable(input_table, vertex_chunk_index,
+/// start_chunk_index)`, over a range of vertex chunks.
 ///
-/// `vertex_count` is the number of vertices the list is aligned by: the source type's for a list
-/// by source, the destination type's for one by destination. A batch holds `_graphArSrcIndex` and
+/// `vertices` are internal ids of the vertices the list is aligned by: the source type's for a
+/// list by source, the destination type's for one by destination. It starts on a vertex chunk
+/// and ends on the next chunk's first vertex or, for the list's last part, at the type's vertex
+/// count, which is how long the last offset chunk is. One call over `0..vertex_count` writes the
+/// whole list, and a writer that holds one part at a time calls it once per vertex chunk. Every
+/// edge's aligned end is in `vertices`. A batch holds `_graphArSrcIndex` and
 /// `_graphArDstIndex` (`int64`, no null: internal ids of the source and destination types) and a
 /// column per edge property, by name. `options` is as for [`write_vertices`].
 ///
@@ -201,7 +249,8 @@ pub async fn write_vertices(
 /// handed sorted by `(src, dst)` stay so. For every part — an empty one too, as C++'s
 /// `EdgesBuilder::Dump` does — it writes `edge_count<p>` and, for an ordered list, the offset
 /// chunk: `_graphArOffset`, `int64`, one row per vertex of the vertex chunk plus one, counted from
-/// the part's first edge, the first always 0. Then the list's `vertex_count`.
+/// the part's first edge, the first always 0. The list's `vertex_count` is
+/// [`write_edge_vertex_count`]'s, once every part is written.
 ///
 /// **A departure from C++, for the specification.** The last offset chunk is as long as the last
 /// vertex chunk, plus one. The specification says: "The partition of the offset table should be in
@@ -219,7 +268,7 @@ pub async fn write_edges(
     root: &Path,
     info: &EdgeInfo,
     adj_list_type: AdjListType,
-    vertex_count: u64,
+    vertices: Range<u64>,
     batches: &[RecordBatch],
     options: &Options,
 ) -> Result<u64, Error> {
@@ -255,10 +304,20 @@ pub async fn write_edges(
     } else {
         (&dst, info.dst_chunk_size)
     };
-    if let Some(&beyond) = key.values().iter().find(|&&id| id as u64 >= vertex_count) {
+    if !vertices.start.is_multiple_of(vertex_chunk_size) || vertices.end < vertices.start {
         return Err(invalid(
             &at,
-            format!("id {beyond} is not below the vertex count, {vertex_count}"),
+            format!("the vertices {vertices:?} do not start a vertex chunk"),
+        ));
+    }
+    if let Some(&beyond) = key
+        .values()
+        .iter()
+        .find(|&&id| !vertices.contains(&(id as u64)))
+    {
+        return Err(invalid(
+            &at,
+            format!("id {beyond} is not one of the vertices {vertices:?}"),
         ));
     }
     let part_of = |row: usize| key.value(row) as u64 / vertex_chunk_size;
@@ -290,7 +349,7 @@ pub async fn write_edges(
 
     let edges = sorted.num_rows() as u64;
     let mut begin = 0u64;
-    for part in 0..chunks(vertex_count, vertex_chunk_size) {
+    for part in vertices.start / vertex_chunk_size..chunks(vertices.end, vertex_chunk_size) {
         let first_vertex = part * vertex_chunk_size;
         let end = begin
             + key.values()[begin as usize..]
@@ -308,7 +367,7 @@ pub async fn write_edges(
             // C++ `EdgesBuilder::getOffsetTable`: for each vertex of the chunk, the number of the
             // part's edges whose end is at or before it.
             let ids = &key.values()[begin as usize..end as usize];
-            let last_vertex = (first_vertex + vertex_chunk_size).min(vertex_count);
+            let last_vertex = (first_vertex + vertex_chunk_size).min(vertices.end);
             let mut seen = 0usize;
             let offsets = Int64Array::from_iter_values(std::iter::once(0).chain(
                 (first_vertex..last_vertex).map(|v| {
@@ -356,14 +415,30 @@ pub async fn write_edges(
         begin = end;
     }
     debug_assert_eq!(begin, edges);
-    put_count(
-        store,
-        root,
-        &paths::edge_vertex_count(info, adj),
-        vertex_count,
-    )
-    .await?;
     Ok(edges)
+}
+
+/// **Writes the count of the vertices an adjacency list is aligned by** — the source type's for a
+/// list by source, the destination type's for one by destination — once its parts are written.
+/// C++ `EdgeChunkWriter::WriteVerticesNum`.
+pub async fn write_edge_vertex_count(
+    store: &dyn ObjectStore,
+    root: &Path,
+    info: &EdgeInfo,
+    adj_list_type: AdjListType,
+    count: u64,
+) -> Result<(), Error> {
+    let adj = info
+        .adj_lists
+        .iter()
+        .find(|a| a.r#type == adj_list_type)
+        .ok_or_else(|| {
+            invalid(
+                format!("edge `{}`, {adj_list_type}", info.triple()),
+                "the edge type has no such adjacency list",
+            )
+        })?;
+    put_count(store, root, &paths::edge_vertex_count(info, adj), count).await
 }
 
 /// **Commits a graph**: writes every information file under `root` — here the directory of the
