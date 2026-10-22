@@ -19,6 +19,7 @@ arrow-cast.workspace = true
 arrow-select.workspace = true
 parquet.workspace = true
 object_store.workspace = true
+futures-util.workspace = true
 oxrdf.workspace = true
 oxttl.workspace = true
 shex_ast.workspace = true

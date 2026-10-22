@@ -40,6 +40,9 @@ prefixmap = "0.3.29"
 parquet = { version = "60", default-features = false, features = ["arrow"] }
 # No default features: `fs` and every cloud store bring `tokio`. The store is the caller's.
 object_store = { version = "0.14", default-features = false }
+# `Stream`, which `graphar-rdf`'s writer reads its triples from: `object_store` already links it, and
+# without `std`'s executor features it reaches no runtime.
+futures-util = { version = "0.3", default-features = false }
 bytes = "1"
 
 [workspace.lints.rust]

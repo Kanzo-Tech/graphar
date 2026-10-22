@@ -16,9 +16,10 @@
 //! - [`Typing`] says which type each subject has: the validator's maximal valid shape map
 //!   ([`Typing::Validate`], rudof's SHACL or ShEx validator), or a shape map the caller states
 //!   ([`Typing::Assume`]).
-//! - [`write()`] places every triple by the schema and writes the graph, each chunk one row group
-//!   whose Parquet `Statistics` carry its distinct counts, then the two mappings, then the shape
-//!   document it validated against, as it was read, then the information files.
+//! - [`write()`] reads the triples grouped by subject, places every triple by the schema and
+//!   writes the graph, each chunk one row group whose Parquet `Statistics` carry its distinct
+//!   counts, then the two mappings, then the shape document it validated against, as it was read,
+//!   then the information files. [`grouped()`] groups triples held in memory.
 //! - [`read()`] is the plan evaluated over the written tables, natively: the triples it reads are
 //!   the triples [`write()`] was given, up to the canonical lexical form of a literal
 //!   (**Statement R**). The same holds through a processor that runs either mapping on the tables;
@@ -29,10 +30,24 @@
 //! every triple a value of one of its type's columns, the class its shape fixes, or an edge to a row of
 //! the destination type, and no single-valued column with two values. Anything else is refused
 //! with the triple and the reason ([`Error::Unplaced`]), or the subject and the validator's reasons
-//! ([`Error::Typing`]), before a file is written. A graph the
-//! shapes describe only in part has no representation here.
+//! ([`Error::Typing`]), and the graph is not committed: its information files are written last,
+//! and only when every triple has its place. A graph the shapes describe only in part has no
+//! representation here.
 //!
-//! **Blocking.** [`write()`] groups the triples by subject in memory; the graph must fit.
+//! **Streaming, under [`Typing::Assume`].** [`write()`] takes the triples grouped by subject, a
+//! subject's triples together, and checks that they are ([`Error::Ungrouped`]). Each subject is
+//! typed by the caller's shape map as it arrives, its row is the next of its type, and a chunk is
+//! written as soon as it fills. What it holds is what GraphAr's layout forces: every subject's IRI
+//! with its type and row, because an adjacency list holds the destination's row and an edge may
+//! name its destination before the destination's own triples; per vertex type, the open chunk of
+//! at most `chunk_size` rows; per edge type, the edges from a chunk of sources until the chunk is
+//! written and every destination of them has arrived; and one subject's triples. Memory is
+//! O(subjects + types × `chunk_size`) when every destination arrives before the edges to it, and
+//! each forward reference holds the part it is in, up to every edge held as a pair of rows. A
+//! refused stream leaves its full chunks and their parts behind, uncommitted ([`write()`]).
+//!
+//! **Under [`Typing::Validate`] it buffers.** rudof validates a graph in memory, so the writer
+//! holds every triple and types every subject before it places one; that graph must fit.
 
 mod mapping;
 mod plan;
@@ -49,7 +64,7 @@ pub use plan::{Expr, Map, Plan, Source, plan};
 pub use read::read;
 pub use schema::{Cardinality, Column, EdgeType, Error, Object, Schema, Storage, VertexType};
 pub use typing::{ShapeMap, Typing};
-pub use write::{Options, Written, write};
+pub use write::{Options, Written, grouped, write};
 
 /// `rdf:type`.
 pub const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";

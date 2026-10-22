@@ -130,11 +130,12 @@ pub enum Error {
     /// A shape document that does not parse.
     #[error("the shapes: {0}")]
     Shapes(String),
-    /// The triples do not parse.
+    /// The triples do not parse, or their source failed: a caller ends the stream
+    /// [`crate::write()`] reads with this, and the graph is not committed.
     #[error("the triples: {0}")]
     Syntax(String),
     /// A triple the schema has no place for: the graph does not conform to the closed reading of
-    /// its shapes, and nothing was written.
+    /// its shapes, and the graph is not committed ([`crate::write()`] says what is left).
     #[error("{triple} does not conform: {reason}")]
     Unplaced {
         /// The triple, in N-Triples.
@@ -142,8 +143,12 @@ pub enum Error {
         /// Why it has no place.
         reason: String,
     },
-    /// A subject the typing gives no type, or more than one: the graph does not conform, and
-    /// nothing was written.
+    /// A subject whose triples are not together: it reappears after another subject's. The
+    /// triples [`crate::write()`] takes are grouped by subject, and it checks that they are.
+    #[error("<{0}> reappears after its triples ended: the triples are not grouped by subject")]
+    Ungrouped(String),
+    /// A subject the typing gives no type, or more than one: the graph does not conform, and it is
+    /// not committed.
     #[error("<{subject}> {}", typed(.types, .reasons))]
     Typing {
         /// The subject.

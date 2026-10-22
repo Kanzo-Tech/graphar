@@ -11,8 +11,8 @@ use futures::executor::block_on;
 use graphar_info::{AdjListType, DataType, FileType, GraphInfo};
 use graphar_parquet::{
     DST_INDEX_COL, Error, Options, SRC_INDEX_COL, VERTEX_INDEX_COL, paths, read_adj_list_chunk,
-    read_count, read_edge_property_chunk, read_offsets, read_vertex_chunk, write_edges,
-    write_vertices,
+    read_count, read_edge_property_chunk, read_offsets, read_vertex_chunk, write_edge_vertex_count,
+    write_edges, write_vertex_count, write_vertices,
 };
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
 
@@ -274,6 +274,124 @@ fn the_information_files_load_back() {
 }
 
 /// `rows` with column `name` replaced by `array`.
+/// Every file under `root`, by path, with its bytes.
+fn files(store: &InMemory, root: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files: Vec<(String, Vec<u8>)> = block_on(async {
+        use futures::{StreamExt, TryStreamExt};
+        let metas: Vec<_> = store.list(Some(root)).try_collect().await.unwrap();
+        futures::stream::iter(metas)
+            .then(|m| async move {
+                let bytes = store.get(&m.location).await.unwrap().bytes().await.unwrap();
+                (m.location.to_string(), bytes.to_vec())
+            })
+            .collect()
+            .await
+    });
+    files.sort();
+    files
+}
+
+#[test]
+fn a_table_written_chunk_by_chunk_is_the_table_written_whole() {
+    let person = sample::person();
+    let knows = sample::knows();
+    let adj = AdjListType::OrderedBySource;
+    let rows = sample::person_rows();
+    let edges = sample::knows_rows();
+    let options = Options::default();
+    let whole = |store: &InMemory, root: &Path| {
+        block_on(async {
+            let n = write_vertices(
+                store,
+                root,
+                &person,
+                0,
+                std::slice::from_ref(&rows),
+                &options,
+            )
+            .await?;
+            write_vertex_count(store, root, &person, n).await?;
+            write_edges(
+                store,
+                root,
+                &knows,
+                adj,
+                0..n,
+                std::slice::from_ref(&edges),
+                &options,
+            )
+            .await?;
+            write_edge_vertex_count(store, root, &knows, adj, n).await
+        })
+        .unwrap();
+    };
+    // One vertex chunk at a time, and the part of the edges from it, as a streaming writer holds
+    // them: 7 people in chunks of 3, so the last chunk and part are one vertex long.
+    let by_chunk = |store: &InMemory, root: &Path| {
+        block_on(async {
+            let n = rows.num_rows() as u64;
+            let src = edges
+                .column_by_name(SRC_INDEX_COL)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .clone();
+            for k in 0..n.div_ceil(person.chunk_size) {
+                let begin = k * person.chunk_size;
+                let end = (begin + person.chunk_size).min(n);
+                let chunk = rows.slice(begin as usize, (end - begin) as usize);
+                write_vertices(store, root, &person, k, &[chunk], &options).await?;
+                let from: arrow_array::BooleanArray = src
+                    .iter()
+                    .map(|s| s.map(|s| (begin..end).contains(&(s as u64))))
+                    .collect();
+                let part = arrow_select::filter::filter_record_batch(&edges, &from).unwrap();
+                write_edges(store, root, &knows, adj, begin..end, &[part], &options).await?;
+            }
+            write_vertex_count(store, root, &person, n).await?;
+            write_edge_vertex_count(store, root, &knows, adj, n).await
+        })
+        .unwrap();
+    };
+    let (a, b) = (InMemory::new(), InMemory::new());
+    let root = Path::from("g");
+    whole(&a, &root);
+    by_chunk(&b, &root);
+    let (a, b) = (files(&a, &root), files(&b, &root));
+    assert!(a.iter().any(|(p, _)| p.ends_with("offset/chunk2")));
+    assert_eq!(
+        a.iter().map(|f| &f.0).collect::<Vec<_>>(),
+        b.iter().map(|f| &f.0).collect::<Vec<_>>()
+    );
+    for ((p, x), (_, y)) in a.iter().zip(&b) {
+        assert!(x == y, "{p}: the same bytes");
+    }
+
+    // A part that does not start a vertex chunk, or an edge outside the part, is refused.
+    let store = InMemory::new();
+    let e = refused(block_on(write_edges(
+        &store,
+        &root,
+        &knows,
+        adj,
+        1..3,
+        &[edges.slice(0, 0)],
+        &options,
+    )));
+    assert!(e.contains("do not start a vertex chunk"), "{e}");
+    let e = refused(block_on(write_edges(
+        &store,
+        &root,
+        &knows,
+        adj,
+        3..6,
+        &[edges],
+        &options,
+    )));
+    assert!(e.contains("is not one of the vertices 3..6"), "{e}");
+}
+
 fn with_column(rows: &RecordBatch, name: &str, array: Arc<dyn Array>) -> RecordBatch {
     let schema = rows.schema();
     let columns = schema.fields().iter().zip(rows.columns()).map(|(f, c)| {
@@ -308,6 +426,7 @@ fn a_column_that_does_not_match_the_information_file_is_refused() {
         &store,
         &root,
         &person,
+        0,
         &[wrong],
         &Options::default(),
     )));
@@ -328,6 +447,7 @@ fn a_column_that_does_not_match_the_information_file_is_refused() {
         &store,
         &root,
         &person,
+        0,
         &[with_null],
         &Options::default(),
     )));
@@ -338,6 +458,7 @@ fn a_column_that_does_not_match_the_information_file_is_refused() {
         &store,
         &root,
         &person,
+        0,
         &[rows.project(&[0]).unwrap()],
         &Options::default(),
     )));
@@ -353,17 +474,17 @@ fn an_edge_beyond_the_vertex_count_is_refused() {
         &Path::from("g"),
         &sample::knows(),
         AdjListType::OrderedBySource,
-        3,
+        0..3,
         &[sample::knows_rows()],
         &Options::default(),
     )));
-    assert!(e.contains("not below the vertex count, 3"), "{e}");
+    assert!(e.contains("is not one of the vertices 0..3"), "{e}");
     let e = refused(block_on(write_edges(
         &store,
         &Path::from("g"),
         &sample::knows(),
         AdjListType::OrderedByDest,
-        7,
+        0..7,
         &[sample::knows_rows()],
         &Options::default(),
     )));
@@ -379,6 +500,7 @@ fn only_parquet_is_written() {
         &store,
         &Path::from("g"),
         &person,
+        0,
         &[sample::person_rows()],
         &Options::default(),
     )));
@@ -395,6 +517,7 @@ fn a_dot_prefix_is_not_a_path() {
         &store,
         &Path::from("g"),
         &person,
+        0,
         &[sample::person_rows()],
         &Options::default(),
     )));
@@ -427,6 +550,7 @@ fn a_list_property_is_an_arrow_list() {
         &store,
         &root,
         &v,
+        0,
         &[rows],
         &Options::default(),
     ))
@@ -517,6 +641,7 @@ fn a_user_defined_type_is_held_only_by_the_arrow_type_the_caller_gave() {
         &store,
         &root,
         &concept,
+        0,
         std::slice::from_ref(&rows),
         &Options::default(),
     )));
@@ -532,6 +657,7 @@ fn a_user_defined_type_is_held_only_by_the_arrow_type_the_caller_gave() {
         &store,
         &root,
         &concept,
+        0,
         &[rows],
         &Options {
             user_types: other,

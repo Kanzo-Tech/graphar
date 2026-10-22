@@ -1,14 +1,16 @@
 //! Statement R: the triples [`graphar_rdf::read`] reads from a written graph are the triples
 //! [`graphar_rdf::write`] was given, up to canonical lexical form, whether the subjects are typed
-//! by validation or by a shape map the caller states; and a graph that does not conform is refused,
-//! with nothing written.
+//! by validation or by a shape map the caller states, in any order of subjects; and a graph that does
+//! not conform, or whose triples are not grouped by subject, is refused, and no graph committed.
 
 use std::collections::BTreeSet;
 
 use futures::executor::block_on;
 use std::collections::HashMap;
 
-use graphar_rdf::{Cardinality, Error, Object, Options, ShapeMap, Typing, read, shapes, write};
+use graphar_rdf::{
+    Cardinality, Error, Object, Options, ShapeMap, Typing, grouped, read, shapes, write,
+};
 use object_store::ObjectStore;
 use object_store::{memory::InMemory, path::Path};
 use oxrdf::Triple;
@@ -55,7 +57,7 @@ fn round_trip(typing: &Typing<'_>, chunk_size: u64) -> (graphar_rdf::Written, BT
         chunk_size,
         ..Options::default()
     };
-    let written = block_on(write(&store, &root, typing, people(), &options))
+    let written = block_on(write(&store, &root, typing, grouped(people()), &options))
         .unwrap_or_else(|e| panic!("written: {e}"));
     let back = block_on(read(&store, &root, &written.info, typing.schema())).expect("read");
     let back_set = set(back.clone());
@@ -193,7 +195,7 @@ fn rdf_type_is_a_predicate_like_any_other() {
         &store,
         &root,
         &typing,
-        triples.clone(),
+        grouped(triples.clone()),
         &Options::default(),
     ))
     .expect("written");
@@ -293,7 +295,7 @@ fn a_graph_that_does_not_conform_is_refused_and_nothing_written() {
                 &store,
                 &Path::from("g"),
                 &typing,
-                triples,
+                grouped(triples),
                 &Options::default(),
             ))
             .expect_err(&extra);
@@ -303,6 +305,7 @@ fn a_graph_that_does_not_conform_is_refused_and_nothing_written() {
                 other => panic!("{extra}: {other}"),
             };
             assert_eq!(got, expected, "{extra}: {err}");
+            // No chunk of a million rows fills before the refusal, so nothing at all is written.
             let written: Vec<_> = block_on(futures::TryStreamExt::try_collect::<Vec<_>>(
                 store.list(None),
             ))
@@ -325,7 +328,7 @@ fn validation_says_why_a_subject_has_no_type() {
         &InMemory::new(),
         &Path::from("g"),
         &Typing::Validate(&shapes),
-        people().into_iter().chain([t]),
+        grouped(people().into_iter().chain([t])),
         &Options::default(),
     ))
     .expect_err("two names");
@@ -425,7 +428,7 @@ fn the_shape_document_is_saved_as_it_was_read_and_only_when_validated() {
             &store,
             &Path::from("g"),
             &Typing::Validate(shapes),
-            people(),
+            grouped(people()),
             &Options::default(),
         ))
         .expect("written");
@@ -468,7 +471,7 @@ fn the_shape_document_is_saved_as_it_was_read_and_only_when_validated() {
         &store,
         &Path::from("g"),
         &Typing::Assume(documents[0].0.schema(), &by_class),
-        people(),
+        grouped(people()),
         &Options::default(),
     ))
     .expect("written");
@@ -480,4 +483,295 @@ fn the_shape_document_is_saved_as_it_was_read_and_only_when_validated() {
     );
     assert!(written.info.extra_info.is_empty());
     assert!(files.contains_key(graphar_rdf::MAPPING_FILE));
+}
+
+/// `triples` as a stream in the order given, which [`write`] takes grouped by subject.
+fn in_order(triples: Vec<Triple>) -> impl futures::Stream<Item = Result<Triple, Error>> + Unpin {
+    futures::stream::iter(triples.into_iter().map(Ok))
+}
+
+/// The triples of `subjects`, in that order, each subject's together.
+fn by_subjects(triples: &[Triple], subjects: &[&str]) -> Vec<Triple> {
+    subjects
+        .iter()
+        .flat_map(|s| {
+            triples
+                .iter()
+                .filter(move |t| t.subject.to_string() == format!("<{s}>"))
+                .cloned()
+        })
+        .collect()
+}
+
+/// Every file name under `root`.
+fn names(store: &InMemory, root: &str) -> BTreeSet<String> {
+    files(store, root).into_keys().collect()
+}
+
+fn by_node(persons: &[String], organizations: &[String]) -> ShapeMap {
+    ShapeMap::Nodes(
+        persons
+            .iter()
+            .map(|p| (p.clone(), "Person".to_owned()))
+            .chain(
+                organizations
+                    .iter()
+                    .map(|o| (o.clone(), "Organization".to_owned())),
+            )
+            .collect(),
+    )
+}
+
+#[test]
+fn a_subject_that_reappears_is_refused_and_no_graph_is_committed() {
+    let shapes = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
+    let by_class = ShapeMap::ByClass;
+    let ex = "https://example.org/";
+    // alice's triples, then bob's, then alice's age again.
+    let mut triples = by_subjects(&people(), &[&format!("{ex}alice"), &format!("{ex}bob")]);
+    let again = triples[0].clone();
+    assert_eq!(again.subject.to_string(), format!("<{ex}alice>"));
+    triples.push(again);
+    for typing in [
+        Typing::Assume(shapes.schema(), &by_class),
+        Typing::Validate(&shapes),
+    ] {
+        let store = InMemory::new();
+        // A chunk a subject: alice's and bob's chunks are written before alice reappears.
+        let options = Options {
+            chunk_size: 1,
+            ..Options::default()
+        };
+        let err = block_on(write(
+            &store,
+            &Path::from("g"),
+            &typing,
+            in_order(triples.clone()),
+            &options,
+        ))
+        .expect_err("alice twice");
+        assert!(
+            matches!(&err, Error::Ungrouped(s) if s == "https://example.org/alice"),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains("<https://example.org/alice>"),
+            "{err}"
+        );
+        // What a streaming write had written is left — full chunks and the parts from them — and
+        // nothing commits it: no type's count, no mapping, no information file.
+        let left = names(&store, "g");
+        assert!(
+            left.iter()
+                .all(|f| (f.starts_with("vertex/") || f.starts_with("edge/"))
+                    && !f.ends_with("vertex_count")),
+            "{left:?}"
+        );
+        if matches!(typing, Typing::Assume(..)) {
+            assert!(
+                left.contains("vertex/Person/properties/chunk0"),
+                "alice's chunk: {left:?}"
+            );
+        } else {
+            assert!(left.is_empty(), "validation writes nothing first: {left:?}");
+        }
+    }
+}
+
+#[test]
+fn an_edge_may_name_a_subject_before_or_after_it_in_every_order() {
+    let shapes = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
+    let ex = |p: &str| format!("https://example.org/{p}");
+    let persons: Vec<String> = ["alice", "bob", "carol", "dave"].map(ex).to_vec();
+    let organizations = vec![ex("acme")];
+    let nodes = by_node(&persons, &organizations);
+    let by_class = ShapeMap::ByClass;
+    let given = canonical();
+    let all: Vec<String> = persons.iter().chain(&organizations).cloned().collect();
+    // Every order of the five subjects: every edge a forward reference in one, a backward one in
+    // another, and every pair of rows in either order.
+    let mut orders = vec![Vec::new()];
+    for _ in 0..all.len() {
+        orders = orders
+            .into_iter()
+            .flat_map(|o: Vec<&str>| {
+                all.iter()
+                    .filter(|s| !o.contains(&s.as_str()))
+                    .map(|s| {
+                        let mut o = o.clone();
+                        o.push(s);
+                        o
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+    }
+    assert_eq!(orders.len(), 120);
+    for order in &orders {
+        let triples = by_subjects(&people(), order);
+        for typing in [
+            Typing::Assume(shapes.schema(), &nodes),
+            Typing::Assume(shapes.schema(), &by_class),
+        ] {
+            for chunk_size in [1, 2, 1 << 20] {
+                let store = InMemory::new();
+                let root = Path::from("g");
+                let options = Options {
+                    chunk_size,
+                    ..Options::default()
+                };
+                let written = block_on(write(
+                    &store,
+                    &root,
+                    &typing,
+                    in_order(triples.clone()),
+                    &options,
+                ))
+                .unwrap_or_else(|e| panic!("{order:?}, chunk {chunk_size}: {e}"));
+                assert_eq!(written.triples as usize, given.len());
+                assert_eq!(written.edges[0].1, 4);
+                assert_eq!(written.edges[1].1, 2);
+                let back =
+                    block_on(read(&store, &root, &written.info, shapes.schema())).expect("read");
+                assert_eq!(set(back), given, "{order:?}, chunk {chunk_size}");
+            }
+        }
+    }
+
+    // A forward reference that arrives as a subject of another type is refused when it arrives.
+    let worksfor_bob: Triple = NTriplesParser::new()
+        .for_slice(format!("<{}> <{}> <{}> .\n", ex("alice"), ex("worksFor"), ex("bob")).as_bytes())
+        .next()
+        .expect("a triple")
+        .expect("N-Triples");
+    let mut triples = by_subjects(&people(), &[&ex("dave"), &ex("carol")]);
+    // alice works for bob, not for acme, and bob arrives after her.
+    let alice: Vec<Triple> = by_subjects(&people(), &[&ex("alice")])
+        .into_iter()
+        .filter(|t| t.predicate.as_str() != ex("worksFor"))
+        .chain([worksfor_bob])
+        .collect();
+    triples.extend(alice);
+    triples.extend(by_subjects(&people(), &[&ex("bob"), &ex("acme")]));
+    let err = block_on(write(
+        &InMemory::new(),
+        &Path::from("g"),
+        &Typing::Assume(shapes.schema(), &nodes),
+        in_order(triples),
+        &Options::default(),
+    ))
+    .expect_err("bob is no organization");
+    assert!(
+        matches!(&err, Error::Unplaced { triple, reason }
+            if triple.contains("worksFor") && reason == "its object is not a row of Organization"),
+        "{err}"
+    );
+}
+
+/// 7 people and 5 organizations, every person knowing two others and working for one: every type
+/// more than three chunks of 2, and edges forward and backward in any order.
+fn many() -> (Vec<Triple>, Vec<String>, Vec<String>) {
+    let ex = "https://example.org/";
+    let person = |i: usize| format!("{ex}p{i}");
+    let organization = |i: usize| format!("{ex}o{i}");
+    let mut text = String::new();
+    for i in 0..7 {
+        let p = person(i);
+        text.push_str(&format!(
+            "<{p}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{ex}Person> .
+             <{p}> <http://xmlns.com/foaf/0.1/name> \"P{i}\" .
+             <{p}> <{ex}age> \"{}\"^^<http://www.w3.org/2001/XMLSchema#integer> .
+             <{p}> <{ex}nick> \"n{i}\"@en .
+             <{p}> <{ex}knows> <{}> .
+             <{p}> <{ex}knows> <{}> .
+             <{p}> <{ex}worksFor> <{}> .\n",
+            20 + i,
+            person((i + 1) % 7),
+            person((i + 3) % 7),
+            organization(i % 5),
+        ));
+    }
+    for i in 0..5 {
+        text.push_str(&format!(
+            "<{o}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{ex}Organization> .
+             <{o}> <{ex}founded> \"{}\"^^<http://www.w3.org/2001/XMLSchema#int> .\n",
+            1990 + i,
+            o = organization(i),
+        ));
+    }
+    let triples = NTriplesParser::new()
+        .for_slice(text.as_bytes())
+        .collect::<Result<_, _>>()
+        .expect("N-Triples");
+    (
+        triples,
+        (0..7).map(person).collect(),
+        (0..5).map(organization).collect(),
+    )
+}
+
+#[test]
+fn a_graph_of_many_chunks_under_every_type_streams_back() {
+    let shapes = shapes::shacl::from_turtle(&data("people.shacl.ttl")).expect("SHACL");
+    let (triples, persons, organizations) = many();
+    let nodes = by_node(&persons, &organizations);
+    let by_class = ShapeMap::ByClass;
+    // Interleaved, people from the last: p6 knows p0 and p2, which come later.
+    let order: Vec<&str> = [6, 5, 4, 3, 2, 1, 0]
+        .iter()
+        .map(|&i| persons[i].as_str())
+        .zip(organizations.iter().map(String::as_str).chain(["", ""]))
+        .flat_map(|(p, o)| [p, o])
+        .filter(|s| !s.is_empty())
+        .collect();
+    assert_eq!(order.len(), 12);
+    let streamed = by_subjects(&triples, &order);
+    assert_eq!(streamed.len(), triples.len());
+    for (name, typing) in [
+        ("by node", Typing::Assume(shapes.schema(), &nodes)),
+        ("by class", Typing::Assume(shapes.schema(), &by_class)),
+        ("SHACL", Typing::Validate(&shapes)),
+    ] {
+        let store = InMemory::new();
+        let root = Path::from("g");
+        let options = Options {
+            chunk_size: 2,
+            ..Options::default()
+        };
+        let written = block_on(write(
+            &store,
+            &root,
+            &typing,
+            in_order(streamed.clone()),
+            &options,
+        ))
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(
+            written.vertices,
+            [("Organization".to_owned(), 5), ("Person".to_owned(), 7)],
+            "{name}"
+        );
+        assert_eq!(
+            written.edges,
+            [
+                ("Person_knows_Person".to_owned(), 14),
+                ("Person_worksFor_Organization".to_owned(), 7)
+            ],
+            "{name}"
+        );
+        assert_eq!(written.triples as usize, triples.len());
+        let files = names(&store, "g");
+        for file in [
+            "vertex/Person/properties/chunk3",
+            "vertex/Organization/properties/chunk2",
+            "edge/Person_knows_Person/ordered_by_source/adj_list/part3/chunk0",
+            "edge/Person_knows_Person/ordered_by_source/offset/chunk3",
+            "edge/Person_worksFor_Organization/ordered_by_source/edge_count3",
+        ] {
+            assert!(files.contains(file), "{name}: {file} in {files:?}");
+        }
+        assert!(!files.contains("vertex/Person/properties/chunk4"), "{name}");
+        let back = block_on(read(&store, &root, &written.info, shapes.schema())).expect("read");
+        assert_eq!(set(back), set(triples.clone()), "{name}");
+    }
 }

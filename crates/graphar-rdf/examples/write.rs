@@ -8,7 +8,7 @@
 //! shapes is refused, naming the subject or the triple and why.
 
 use futures::executor::block_on;
-use graphar_rdf::{Options, Typing, shapes, write};
+use graphar_rdf::{Options, Typing, grouped, shapes, write};
 use object_store::{local::LocalFileSystem, path::Path};
 use oxttl::{NTriplesParser, TurtleParser};
 
@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &store,
         &Path::from(""),
         &Typing::Validate(&shapes),
-        triples,
+        grouped(triples),
         &options,
     ))?;
     println!(
