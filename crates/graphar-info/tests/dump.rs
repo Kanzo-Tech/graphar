@@ -198,20 +198,20 @@ fn types_and_versions_are_written_in_graphars_words() {
 fn a_set_of_a_user_defined_type_round_trips() {
     // "GraphAr also supports the user-defined data types, which can be used to represent complex
     // data structures, such as the struct, map, and union types" (format.md, "Property Data
-    // Types"), declared by the version as `gar/v1 (langString)` (C++ `InfoVersion`).
+    // Types"), declared by the version as `gar/v1 (langstring)` (C++ `InfoVersion`).
     let mut g = graph();
     let declaring = InfoVersion {
         version: 1,
-        user_define_types: vec!["langString".to_owned()],
+        user_define_types: vec!["langstring".to_owned()],
     };
     let labels = Property {
-        data_type: "langString".parse().unwrap(),
+        data_type: "langstring".parse().unwrap(),
         cardinality: Cardinality::Set,
         ..property("labels", DataType::String, false)
     };
     assert_eq!(
         labels.data_type,
-        DataType::UserDefined("langString".to_owned())
+        DataType::UserDefined("langstring".to_owned())
     );
     g.vertices[0].property_groups[0].properties.push(labels);
     // Undeclared, the graph does not dump.
@@ -219,9 +219,9 @@ fn a_set_of_a_user_defined_type_round_trips() {
     g.vertices[0].version = declaring.clone();
     g.version = declaring;
     let files = g.dump().unwrap();
-    assert!(files[0].1.contains("data_type: langString"));
+    assert!(files[0].1.contains("data_type: langstring"));
     assert!(files[0].1.contains("cardinality: set"));
-    assert!(files[0].1.ends_with("version: gar/v1 (langString)\n"));
+    assert!(files[0].1.ends_with("version: gar/v1 (langstring)\n"));
     let back = GraphInfo::load(&files[2].1, |name| {
         Ok(files.iter().find(|(n, _)| n == name).unwrap().1.clone())
     })

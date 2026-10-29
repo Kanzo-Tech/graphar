@@ -10,8 +10,8 @@ property_groups:
         is_primary: true
         is_nullable: false
       - name: labels
-        data_type: langString
+        data_type: langstring
         is_primary: false
         is_nullable: true
         cardinality: set
-version: gar/v1 (langString)
+version: gar/v1 (langstring)

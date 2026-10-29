@@ -244,14 +244,14 @@ describe('attachGraph', () => {
 });
 
 describe('attachGraph over user_defined: a list of a user-defined type', () => {
-  // `gar/v1 (langString)` declares the type; GraphAr gives it no storage. graphar-parquet wrote it
+  // `gar/v1 (langstring)` declares the type; GraphAr gives it no storage. graphar-parquet wrote it
   // as LIST<STRUCT<value: STRING, lang: STRING>>, and the view reads that from the file.
   const user = 'user_defined.graph.yml';
 
   it('reads the column as a DuckDB LIST of STRUCT, and says its type in GraphAr\'s words', async () => {
     const e = await engine();
     await using g = await attachGraph(e, 'u', under(USER_DEFINED), { entry: user });
-    expect(g.graph.version).toBe('gar/v1 (langString)');
+    expect(g.graph.version).toBe('gar/v1 (langstring)');
     const types = await e.rows(`SELECT column_name, column_type FROM (DESCRIBE "u"."concept")`);
     expect(types).toEqual([
       { column_name: '_graphArVertexIndex', column_type: 'BIGINT' },
@@ -269,7 +269,7 @@ describe('attachGraph over user_defined: a list of a user-defined type', () => {
     ).toEqual([{ lang: 'en' }, { lang: 'es' }]);
     expect(await e.rows(`SELECT property, data_type, is_nullable, cardinality FROM "u".graphar_properties ORDER BY ordinal`)).toEqual([
       { property: 'id', data_type: 'int64', is_nullable: false, cardinality: 'single' },
-      { property: 'labels', data_type: 'langString', is_nullable: true, cardinality: 'set' },
+      { property: 'labels', data_type: 'langstring', is_nullable: true, cardinality: 'set' },
     ]);
   });
 
@@ -278,9 +278,9 @@ describe('attachGraph over user_defined: a list of a user-defined type', () => {
     await writeFile(join(dir, 'vertex/concept/vertex_count'), Buffer.alloc(8));
     const e = await engine();
     const without = attachGraph(e, 'u', under(dir), { entry: user });
-    await expect(without).rejects.toMatchObject({ code: 'unsupported', message: expect.stringMatching(/`langString` has no DuckDB type/) });
+    await expect(without).rejects.toMatchObject({ code: 'unsupported', message: expect.stringMatching(/`langstring` has no DuckDB type/) });
 
-    const userTypes = { langString: 'STRUCT(value VARCHAR, lang VARCHAR)' };
+    const userTypes = { langstring: 'STRUCT(value VARCHAR, lang VARCHAR)' };
     await using _g = await attachGraph(e, 'u', under(dir), { entry: user, userTypes });
     expect(await e.rows(`SELECT column_type FROM (DESCRIBE "u"."concept") WHERE column_name = 'labels'`)).toEqual([
       { column_type: 'STRUCT("value" VARCHAR, lang VARCHAR)[]' },

@@ -356,10 +356,10 @@ pub async fn write(store: &dyn ObjectStore, root: &Path) -> Result<(), Error> {
 // graph of its own so that `sample`, which C++ opens, stays the C++ reader's check.
 // ---------------------------------------------------------------------------------------------
 
-/// The user-defined type of the graph, declared by its version: `gar/v1 (langString)`.
-pub const LANG_STRING: &str = "langString";
+/// The user-defined type of the graph, declared by its version: `gar/v1 (langstring)`.
+pub const LANG_STRING: &str = "langstring";
 
-/// The Arrow type the caller gives `langString`: `STRUCT<value: STRING, lang: STRING>`.
+/// The Arrow type the caller gives `langstring`: `STRUCT<value: STRING, lang: STRING>`.
 pub fn user_types() -> UserTypes {
     let fields = Fields::from(vec![
         Field::new("value", Arrow::Utf8, false),

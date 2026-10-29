@@ -495,13 +495,13 @@ fn a_user_defined_type_is_held_only_by_the_arrow_type_the_caller_gave() {
         &Options::default(),
     )));
     assert!(
-        e.contains("property `labels`") && e.contains("`langString`"),
+        e.contains("property `labels`") && e.contains("`langstring`"),
         "{e}"
     );
 
     // A different one.
     let mut other = sample::user_types();
-    other.insert("langString".to_owned(), Arrow::Utf8);
+    other.insert("langstring".to_owned(), Arrow::Utf8);
     let e = refused(block_on(write_vertices(
         &store,
         &root,

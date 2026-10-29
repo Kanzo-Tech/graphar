@@ -144,7 +144,7 @@ fn chunks(count: u64, chunk_size: u64) -> u64 {
 /// holds a column per property, by name; other columns are not read. Each chunk of each group is
 /// `_graphArVertexIndex` (`int64`, the id) then the group's properties, in the information file's
 /// order and nullability. A property's column must hold its GraphAr type, and one that is not
-/// nullable must hold no null. A property of a user-defined type (`gar/v1 (langString)`) must be
+/// nullable must hold no null. A property of a user-defined type (`gar/v1 (langstring)`) must be
 /// held by the Arrow type `options.user_types` gives its name, which GraphAr does not define.
 ///
 /// It writes no information file: [`write_info`] does, once every table is written.

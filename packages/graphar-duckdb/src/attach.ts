@@ -48,8 +48,8 @@ export interface AttachOptions {
   /** Stops the attach: it rejects with the signal's reason, and what it made is given back. */
   readonly signal?: AbortSignal;
   /**
-   * The DuckDB type of each user-defined type the graph's version declares (`gar/v1 (langString)`),
-   * as SQL: `{ langString: 'STRUCT(value VARCHAR, lang VARCHAR)' }`. GraphAr names such types and
+   * The DuckDB type of each user-defined type the graph's version declares (`gar/v1 (langstring)`),
+   * as SQL: `{ langstring: 'STRUCT(value VARCHAR, lang VARCHAR)' }`. GraphAr names such types and
    * defines no storage for them, so a view over chunks reads the type from the Parquet file, and
    * this is needed only to type a view that has no chunk to read: a type with no rows.
    */

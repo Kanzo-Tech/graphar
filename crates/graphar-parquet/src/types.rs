@@ -7,10 +7,10 @@ use arrow_schema::{DataType as Arrow, TimeUnit};
 use graphar_info::{Cardinality, DataType, Property};
 use parquet::file::properties::WriterProperties;
 
-/// The Arrow type of each user-defined type a graph's version declares (`gar/v1 (langString)`),
+/// The Arrow type of each user-defined type a graph's version declares (`gar/v1 (langstring)`),
 /// by name. GraphAr declares user-defined types and says nothing of how they are stored, so the
-/// writer's caller says: a column of a property typed `langString` must have exactly the Arrow
-/// type under `langString`, and a name with no entry has no column that can hold it. Nothing in
+/// writer's caller says: a column of a property typed `langstring` must have exactly the Arrow
+/// type under `langstring`, and a name with no entry has no column that can hold it. Nothing in
 /// this crate knows any name.
 pub type UserTypes = BTreeMap<String, Arrow>;
 

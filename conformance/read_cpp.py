@@ -12,8 +12,8 @@ oracle, so it does not read them from the writer it checks.
     python conformance/read_cpp.py conformance
 
 Two graphs are under it. `sample` is opened and read. `user_defined` has a property typed
-`data_type: langString` with `cardinality: set`, `langString` being declared by the graph's version,
-`gar/v1 (langString)`; on disk one Parquet `LIST<STRUCT<value: STRING, lang: STRING>>`: the
+`data_type: langstring` with `cardinality: set`, `langstring` being declared by the graph's version,
+`gar/v1 (langstring)`; on disk one Parquet `LIST<STRUCT<value: STRING, lang: STRING>>`: the
 specification allows it ("GraphAr also supports the user-defined data types, which can be used to
 represent complex data structures, such as the struct, map, and union types", format.md,
 "Property Data Types"), and C++ v0.13.0 does not. Its `DataType::TypeNameToDataType` (`types.cc`)
@@ -105,8 +105,8 @@ def refused(graph, what, message):
 
 def user_defined(root):
     graph = os.path.join(root, "user_defined", "user_defined.graph.yml")
-    refused(graph, "C++ on langString, declared by the version, with cardinality set",
-            "Unsupported data type langString")
+    refused(graph, "C++ on langstring, declared by the version, with cardinality set",
+            "Unsupported data type langstring")
     # Controls on a copy: the refusal is C++'s list of type names, not the cardinality and not the
     # version's declaration. `time` is a type the specification lists and C++ refuses the same way.
     with tempfile.TemporaryDirectory() as tmp:
@@ -114,10 +114,10 @@ def user_defined(root):
         shutil.copytree(os.path.join(root, "user_defined"), copy)
         vertex = os.path.join(copy, "concept.vertex.yml")
         original = open(vertex).read()
-        open(vertex, "w").write(original.replace("data_type: langString", "data_type: string"))
+        open(vertex, "w").write(original.replace("data_type: langstring", "data_type: string"))
         g = graphar.GraphInfo.load(os.path.join(copy, "user_defined.graph.yml"))
         check("C++ on string with cardinality set loads", g.get_vertex_info("concept").get_property_cardinality("labels").name, "SET")
-        open(vertex, "w").write(original.replace("data_type: langString", "data_type: time"))
+        open(vertex, "w").write(original.replace("data_type: langstring", "data_type: time"))
         refused(os.path.join(copy, "user_defined.graph.yml"), "C++ on time", "Unsupported data type time")
 
 
