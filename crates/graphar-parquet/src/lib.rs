@@ -35,7 +35,7 @@ pub use error::Error;
 pub use read::{
     read_adj_list_chunk, read_count, read_edge_property_chunk, read_offsets, read_vertex_chunk,
 };
-pub use write::{write_edges, write_info, write_vertices};
+pub use write::{EdgeWriter, VertexWriter, write_edges, write_info, write_vertices};
 
 /// The internal vertex id in every vertex chunk: `int64`, the row of the vertex in its type's
 /// logical table. C++ `GeneralParams::kVertexIndexCol`.

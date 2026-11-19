@@ -10,9 +10,9 @@ use arrow_schema::DataType as Arrow;
 use futures::executor::block_on;
 use graphar_info::{AdjListType, DataType, FileType, GraphInfo};
 use graphar_parquet::{
-    DST_INDEX_COL, Error, Options, SRC_INDEX_COL, VERTEX_INDEX_COL, paths, read_adj_list_chunk,
-    read_count, read_edge_property_chunk, read_offsets, read_vertex_chunk, write_edges,
-    write_vertices,
+    DST_INDEX_COL, EdgeWriter, Error, Options, SRC_INDEX_COL, VERTEX_INDEX_COL, VertexWriter,
+    paths, read_adj_list_chunk, read_count, read_edge_property_chunk, read_offsets,
+    read_vertex_chunk, write_edges, write_vertices,
 };
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
 
@@ -539,4 +539,131 @@ fn a_user_defined_type_is_held_only_by_the_arrow_type_the_caller_gave() {
         },
     )));
     assert!(e.contains("property `labels`"), "{e}");
+}
+
+/// Every file under `root`, with its bytes.
+fn files(store: &InMemory, root: &Path) -> Vec<(String, Vec<u8>)> {
+    use futures::StreamExt;
+    block_on(async {
+        let mut out = Vec::new();
+        let listed: Vec<_> = store.list(Some(root)).collect().await;
+        for meta in listed {
+            let location = meta.unwrap().location;
+            let bytes = store.get(&location).await.unwrap().bytes().await.unwrap();
+            out.push((location.to_string(), bytes.to_vec()));
+        }
+        out.sort();
+        out
+    })
+}
+
+#[test]
+fn a_clustered_stream_writes_what_one_table_does() {
+    let root = Path::from("g");
+    for adj_list_type in [AdjListType::OrderedBySource, AdjListType::UnorderedByDest] {
+        let whole = InMemory::new();
+        let options = Options::default();
+        block_on(write_edges(
+            &whole,
+            &root,
+            &sample::knows(),
+            adj_list_type,
+            7,
+            &[sample::knows_rows()],
+            &options,
+        ))
+        .unwrap();
+        // The same edges in the list's order, one edge per batch.
+        let rows = sample::knows_rows();
+        let key = rows
+            .column_by_name(if adj_list_type.by_source() {
+                SRC_INDEX_COL
+            } else {
+                DST_INDEX_COL
+            })
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .clone();
+        let mut order: Vec<usize> = (0..rows.num_rows()).collect();
+        if adj_list_type.ordered() {
+            order.sort_by_key(|&r| key.value(r));
+        } else {
+            order.sort_by_key(|&r| key.value(r) / sample::knows().dst_chunk_size as i64);
+        }
+        let streamed = InMemory::new();
+        let info = sample::knows();
+        block_on(async {
+            let mut writer =
+                EdgeWriter::new(&streamed, &root, &info, adj_list_type, 7, &options).unwrap();
+            for r in order {
+                writer.write(&rows.slice(r, 1)).await.unwrap();
+            }
+            assert_eq!(writer.finish().await.unwrap(), 8);
+        });
+        assert_eq!(
+            files(&streamed, &root),
+            files(&whole, &root),
+            "{adj_list_type}"
+        );
+    }
+}
+
+#[test]
+fn a_clustered_stream_out_of_order_is_refused() {
+    let root = Path::from("g");
+    let store = InMemory::new();
+    let options = Options::default();
+    let info = sample::knows();
+    let rows = sample::knows_rows();
+    let src = ints(std::slice::from_ref(&rows), SRC_INDEX_COL);
+    let (high, low) = (
+        src.iter().position(|&s| s == 6).unwrap(),
+        src.iter().position(|&s| s == 0).unwrap(),
+    );
+    let refusal = block_on(async {
+        let mut writer = EdgeWriter::new(
+            &store,
+            &root,
+            &info,
+            AdjListType::OrderedBySource,
+            7,
+            &options,
+        )
+        .unwrap();
+        writer.write(&rows.slice(high, 1)).await.unwrap();
+        writer
+            .write(&rows.slice(low, 1))
+            .await
+            .unwrap_err()
+            .to_string()
+    });
+    assert!(refusal.contains("out of the list's order"), "{refusal}");
+}
+
+#[test]
+fn vertices_streamed_a_row_at_a_time_write_what_one_table_does() {
+    let root = Path::from("g");
+    let options = Options::default();
+    let whole = InMemory::new();
+    block_on(write_vertices(
+        &whole,
+        &root,
+        &sample::person(),
+        &[sample::person_rows()],
+        &options,
+    ))
+    .unwrap();
+    let streamed = InMemory::new();
+    let info = sample::person();
+    let rows = sample::person_rows();
+    block_on(async {
+        let mut writer = VertexWriter::new(&streamed, &root, &info, &options).unwrap();
+        for r in 0..rows.num_rows() {
+            writer.write(&rows.slice(r, 1)).await.unwrap();
+        }
+        assert_eq!(writer.finish().await.unwrap(), 7);
+    });
+    assert_eq!(files(&streamed, &root), files(&whole, &root));
 }

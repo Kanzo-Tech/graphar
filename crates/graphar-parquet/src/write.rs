@@ -7,7 +7,7 @@ use arrow_array::{Array, ArrayRef, Int64Array, RecordBatch, UInt64Array};
 use arrow_schema::{DataType as Arrow, Field, Schema, SchemaRef};
 use arrow_select::{concat::concat_batches, take::take_record_batch};
 use graphar_info::{
-    AdjListType, EdgeInfo, FileType, GraphInfo, Property, PropertyGroup, VertexInfo,
+    AdjListType, AdjacentList, EdgeInfo, FileType, GraphInfo, Property, PropertyGroup, VertexInfo,
 };
 use object_store::{ObjectStore, PutOptions, PutPayload, path::Path};
 use parquet::arrow::ArrowWriter;
@@ -162,7 +162,8 @@ fn chunks(count: u64, chunk_size: u64) -> u64 {
 /// nullable must hold no null. A property of a user-defined type (`gar/v1 (langString)`) must be
 /// held by the Arrow type `options.user_types` gives its name, which GraphAr does not define.
 ///
-/// It writes no information file: [`write_info`] does, once every table is written.
+/// It writes no information file: [`write_info`] does, once every table is written. It is
+/// [`VertexWriter`] handed every batch at once.
 pub async fn write_vertices(
     store: &dyn ObjectStore,
     root: &Path,
@@ -170,37 +171,147 @@ pub async fn write_vertices(
     batches: &[RecordBatch],
     options: &Options,
 ) -> Result<u64, Error> {
-    info.validate()?;
-    let at = format!("vertex `{}`", info.r#type);
-    for (i, group) in info.property_groups.iter().enumerate() {
-        parquet_only(format!("{at}, property group {i}"), group.file_type)?;
+    let mut writer = VertexWriter::new(store, root, info, options)?;
+    for batch in batches {
+        writer.write(batch).await?;
     }
-    let table = one(&at, batches)?;
-    let count = table.num_rows() as u64;
-    let mut checked = Vec::with_capacity(info.property_groups.len());
-    for group in &info.property_groups {
-        checked.push(group_columns(&at, &table, group, &options.user_types)?);
+    writer.finish().await
+}
+
+/// **Writes a vertex type's logical table from a stream of batches**, a chunk as soon as it is
+/// full, so it holds at most one chunk of rows. The rows are the vertices in order, across every
+/// call: the first row of a batch is the vertex after the last row of the batch before. What a
+/// batch holds is as for [`write_vertices`]. [`finish`](Self::finish) writes the last chunk and
+/// the `vertex_count`.
+pub struct VertexWriter<'a> {
+    store: &'a dyn ObjectStore,
+    root: Path,
+    info: &'a VertexInfo,
+    options: &'a Options,
+    at: String,
+    /// Rows handed so far.
+    count: u64,
+    /// The next chunk to write.
+    chunk: u64,
+    /// Rows of the chunk being filled, as the groups' columns side by side.
+    pending: Vec<RecordBatch>,
+    pending_rows: u64,
+}
+
+impl<'a> VertexWriter<'a> {
+    /// A writer for `info`'s table under `root`; nothing is written until a chunk is full.
+    ///
+    /// # Errors
+    ///
+    /// An invalid `info`, or a property group in a file type other than Parquet.
+    pub fn new(
+        store: &'a dyn ObjectStore,
+        root: &Path,
+        info: &'a VertexInfo,
+        options: &'a Options,
+    ) -> Result<Self, Error> {
+        info.validate()?;
+        let at = format!("vertex `{}`", info.r#type);
+        for (i, group) in info.property_groups.iter().enumerate() {
+            parquet_only(format!("{at}, property group {i}"), group.file_type)?;
+        }
+        Ok(Self {
+            store,
+            root: root.clone(),
+            info,
+            options,
+            at,
+            count: 0,
+            chunk: 0,
+            pending: Vec::new(),
+            pending_rows: 0,
+        })
     }
-    for k in 0..chunks(count, info.chunk_size) {
-        let begin = k * info.chunk_size;
-        let len = info.chunk_size.min(count - begin);
+
+    /// The next vertices, in order.
+    ///
+    /// # Errors
+    ///
+    /// A column missing or of a type that does not hold its property, a null where none may be,
+    /// or the store's refusal of a chunk.
+    pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), Error> {
+        let mut columns = Vec::new();
+        for group in &self.info.property_groups {
+            columns.extend(group_columns(
+                &self.at,
+                batch,
+                group,
+                &self.options.user_types,
+            )?);
+        }
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        self.pending.push(batch_of(columns)?);
+        self.pending_rows += batch.num_rows() as u64;
+        self.count += batch.num_rows() as u64;
+        while self.pending_rows >= self.info.chunk_size {
+            self.flush(self.info.chunk_size).await?;
+        }
+        Ok(())
+    }
+
+    /// Writes the first `len` pending rows as the next chunk of every group.
+    async fn flush(&mut self, len: u64) -> Result<(), Error> {
+        let pending = one(&self.at, &self.pending)?;
+        let begin = self.chunk * self.info.chunk_size;
         let ids: ArrayRef = Arc::new(Int64Array::from_iter_values(
             (begin..begin + len).map(|i| i as i64),
         ));
-        for (group, columns) in info.property_groups.iter().zip(&checked) {
+        let rows = pending.slice(0, len as usize);
+        let mut column = 0;
+        for group in &self.info.property_groups {
+            let width = group.properties.len();
             let mut chunk = vec![(index_field(VERTEX_INDEX_COL), ids.clone())];
+            let schema = rows.schema();
             chunk.extend(
-                columns.iter().map(|(field, array)| {
-                    (field.clone(), array.slice(begin as usize, len as usize))
-                }),
+                (column..column + width).map(|c| (schema.field(c).clone(), rows.column(c).clone())),
             );
-            let path = paths::vertex_chunk(info, group, k);
-            let batch = batch_of(chunk)?;
-            put_parquet(store, root, &path, &batch, &options.props).await?;
+            column += width;
+            let path = paths::vertex_chunk(self.info, group, self.chunk);
+            put_parquet(
+                self.store,
+                &self.root,
+                &path,
+                &batch_of(chunk)?,
+                &self.options.props,
+            )
+            .await?;
         }
+        let rest = pending.num_rows() as u64 - len;
+        self.pending = if rest == 0 {
+            Vec::new()
+        } else {
+            vec![pending.slice(len as usize, rest as usize)]
+        };
+        self.pending_rows = rest;
+        self.chunk += 1;
+        Ok(())
     }
-    put_count(store, root, &paths::vertex_count(info), count).await?;
-    Ok(count)
+
+    /// Writes the last chunk and the `vertex_count`, and returns the count.
+    ///
+    /// # Errors
+    ///
+    /// The store's refusal.
+    pub async fn finish(mut self) -> Result<u64, Error> {
+        if self.pending_rows > 0 {
+            self.flush(self.pending_rows).await?;
+        }
+        put_count(
+            self.store,
+            &self.root,
+            &paths::vertex_count(self.info),
+            self.count,
+        )
+        .await?;
+        Ok(self.count)
+    }
 }
 
 /// **Writes one adjacency list of an edge type**, with its property groups, and returns the
@@ -230,6 +341,8 @@ pub async fn write_vertices(
 /// Where the specification is silent, C++ is followed: the file names (`paths`), the count files
 /// (one little-endian `int64`, as C++ writes it in memory on its platforms), and a count and an
 /// offset chunk for every part, empty or not (`EdgesBuilder::Dump`).
+///
+/// It is [`EdgeWriter`] handed the edges sorted as the list orders them.
 pub async fn write_edges(
     store: &dyn ObjectStore,
     root: &Path,
@@ -239,147 +352,341 @@ pub async fn write_edges(
     batches: &[RecordBatch],
     options: &Options,
 ) -> Result<u64, Error> {
-    info.validate()?;
-    let at = format!("edge `{}`, {adj_list_type}", info.triple());
-    let adj = info
-        .adj_lists
-        .iter()
-        .find(|a| a.r#type == adj_list_type)
-        .ok_or_else(|| invalid(&at, "the edge type has no such adjacency list"))?;
-    parquet_only(&at, adj.file_type)?;
-    for (i, group) in info.property_groups.iter().enumerate() {
-        parquet_only(format!("{at}, property group {i}"), group.file_type)?;
-    }
-    let table = one(&at, batches)?;
-    let ends = |name: &str| -> Result<Int64Array, Error> {
-        let array = column(&at, &table, name)?;
-        let ids = array
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| invalid(&at, format!("`{name}` is not int64")))?;
-        if ids.null_count() > 0 {
-            return Err(invalid(&at, format!("`{name}` holds a null")));
+    let mut writer = EdgeWriter::new(store, root, info, adj_list_type, vertex_count, options)?;
+    let table = one(&writer.at, batches)?;
+    // A stable sort, by the aligned end for an ordered list and by its part for an unordered
+    // one. A key that is not an id column is left for the writer to refuse.
+    let key = table
+        .column_by_name(writer.key_name())
+        .and_then(|k| k.as_any().downcast_ref::<Int64Array>().cloned());
+    let sorted = match key {
+        Some(key) if key.null_count() == 0 => {
+            let mut rows: Vec<u64> = (0..table.num_rows() as u64).collect();
+            if adj_list_type.ordered() {
+                rows.sort_by_key(|&r| key.value(r as usize));
+            } else {
+                let size = writer.vertex_chunk_size as i64;
+                rows.sort_by_key(|&r| key.value(r as usize).div_euclid(size));
+            }
+            take_record_batch(&table, &UInt64Array::from(rows))?
         }
-        if ids.values().iter().any(|&id| id < 0) {
-            return Err(invalid(&at, format!("`{name}` holds a negative id")));
+        _ => table,
+    };
+    writer.write(&sorted).await?;
+    writer.finish().await
+}
+
+/// **Writes one adjacency list from a stream of batches**, clustered: the edges arrive in the
+/// order the list keeps — ascending by the aligned end for an ordered list, ascending by its part
+/// for an unordered one — across every call, and a batch out of that order is refused. A chunk is
+/// written as soon as it is full and a part as soon as an edge of a later part arrives, so the
+/// writer holds at most one chunk of edges and one offset per vertex of one vertex chunk.
+///
+/// Which vertices an edge's end ranges over, what a batch holds, and what is written per part are
+/// as for [`write_edges`]. [`finish`](Self::finish) closes the last part, writes a count and an
+/// offset chunk for every part no edge reached, and the list's `vertex_count`.
+///
+/// This is the writer of a clustered input — Iceberg's `ClusteredWriter`, Spark GraphAr's
+/// `EdgeWriter` after its repartition by vertex chunk: how the edges came to be in order (an
+/// in-memory sort, or partitions sorted one at a time) is the caller's.
+pub struct EdgeWriter<'a> {
+    store: &'a dyn ObjectStore,
+    root: Path,
+    info: &'a EdgeInfo,
+    adj: &'a AdjacentList,
+    adj_list_type: AdjListType,
+    options: &'a Options,
+    at: String,
+    vertex_count: u64,
+    vertex_chunk_size: u64,
+    /// The part being filled, its edges so far, and its next chunk.
+    part: u64,
+    part_edges: u64,
+    chunk: u64,
+    /// For an ordered list, the edges of each vertex of the part's vertex chunk.
+    degrees: Vec<i64>,
+    /// The last key handed, which the next may not precede.
+    last: i64,
+    /// Edges not yet in a chunk: the ends, then the groups' columns.
+    pending: Vec<RecordBatch>,
+    pending_rows: u64,
+    edges: u64,
+}
+
+impl<'a> EdgeWriter<'a> {
+    /// A writer for `info`'s list of type `adj_list_type` under `root`.
+    ///
+    /// # Errors
+    ///
+    /// An invalid `info`, an adjacency list it does not have, or a file in a type other than
+    /// Parquet.
+    pub fn new(
+        store: &'a dyn ObjectStore,
+        root: &Path,
+        info: &'a EdgeInfo,
+        adj_list_type: AdjListType,
+        vertex_count: u64,
+        options: &'a Options,
+    ) -> Result<Self, Error> {
+        info.validate()?;
+        let at = format!("edge `{}`, {adj_list_type}", info.triple());
+        let adj = info
+            .adj_lists
+            .iter()
+            .find(|a| a.r#type == adj_list_type)
+            .ok_or_else(|| invalid(&at, "the edge type has no such adjacency list"))?;
+        parquet_only(&at, adj.file_type)?;
+        for (i, group) in info.property_groups.iter().enumerate() {
+            parquet_only(format!("{at}, property group {i}"), group.file_type)?;
         }
-        Ok(ids.clone())
-    };
-    let (src, dst) = (ends(SRC_INDEX_COL)?, ends(DST_INDEX_COL)?);
-    let (key, vertex_chunk_size) = if adj_list_type.by_source() {
-        (&src, info.src_chunk_size)
-    } else {
-        (&dst, info.dst_chunk_size)
-    };
-    if let Some(&beyond) = key.values().iter().find(|&&id| id as u64 >= vertex_count) {
-        return Err(invalid(
-            &at,
-            format!("id {beyond} is not below the vertex count, {vertex_count}"),
-        ));
-    }
-    let part_of = |row: usize| key.value(row) as u64 / vertex_chunk_size;
-
-    // A stable sort, by the aligned end for an ordered list and by its part for an unordered one.
-    let mut rows: Vec<u64> = (0..table.num_rows() as u64).collect();
-    if adj_list_type.ordered() {
-        rows.sort_by_key(|&r| key.value(r as usize));
-    } else {
-        rows.sort_by_key(|&r| part_of(r as usize));
-    }
-    let order = UInt64Array::from(rows);
-    let mut columns: Vec<(Field, ArrayRef)> = vec![
-        (index_field(SRC_INDEX_COL), Arc::new(src.clone())),
-        (index_field(DST_INDEX_COL), Arc::new(dst.clone())),
-    ];
-    let mut grouped = Vec::with_capacity(info.property_groups.len());
-    for group in &info.property_groups {
-        let checked = group_columns(&at, &table, group, &options.user_types)?;
-        grouped.push(checked.len());
-        columns.extend(checked);
-    }
-    let sorted = take_record_batch(&batch_of(columns)?, &order)?;
-    let key = sorted.column(usize::from(!adj_list_type.by_source()));
-    let key = key
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("an id column");
-
-    let edges = sorted.num_rows() as u64;
-    let mut begin = 0u64;
-    for part in 0..chunks(vertex_count, vertex_chunk_size) {
-        let first_vertex = part * vertex_chunk_size;
-        let end = begin
-            + key.values()[begin as usize..]
-                .iter()
-                .take_while(|&&id| (id as u64) / vertex_chunk_size == part)
-                .count() as u64;
-        put_count(
+        let vertex_chunk_size = if adj_list_type.by_source() {
+            info.src_chunk_size
+        } else {
+            info.dst_chunk_size
+        };
+        let mut writer = Self {
             store,
-            root,
-            &paths::edge_count(info, adj, part),
-            end - begin,
+            root: root.clone(),
+            info,
+            adj,
+            adj_list_type,
+            options,
+            at,
+            vertex_count,
+            vertex_chunk_size,
+            part: 0,
+            part_edges: 0,
+            chunk: 0,
+            degrees: Vec::new(),
+            last: 0,
+            pending: Vec::new(),
+            pending_rows: 0,
+            edges: 0,
+        };
+        writer.start_part();
+        Ok(writer)
+    }
+
+    fn key_name(&self) -> &'static str {
+        if self.adj_list_type.by_source() {
+            SRC_INDEX_COL
+        } else {
+            DST_INDEX_COL
+        }
+    }
+
+    fn start_part(&mut self) {
+        let first = self.part * self.vertex_chunk_size;
+        let last = (first + self.vertex_chunk_size).min(self.vertex_count);
+        self.part_edges = 0;
+        self.chunk = 0;
+        self.degrees = if self.adj_list_type.ordered() {
+            vec![0; last.saturating_sub(first) as usize]
+        } else {
+            Vec::new()
+        };
+    }
+
+    /// The next edges, in the list's order.
+    ///
+    /// # Errors
+    ///
+    /// An end column missing, not `int64`, with a null, a negative id or one not below the vertex
+    /// count; an edge out of the list's order; a property column as for [`write_edges`]; or the
+    /// store's refusal of a chunk.
+    pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), Error> {
+        let at = self.at.clone();
+        let ends = |name: &str| -> Result<Int64Array, Error> {
+            let array = column(&at, batch, name)?;
+            let ids = array
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or_else(|| invalid(&at, format!("`{name}` is not int64")))?;
+            if ids.null_count() > 0 {
+                return Err(invalid(&at, format!("`{name}` holds a null")));
+            }
+            if ids.values().iter().any(|&id| id < 0) {
+                return Err(invalid(&at, format!("`{name}` holds a negative id")));
+            }
+            Ok(ids.clone())
+        };
+        let (src, dst) = (ends(SRC_INDEX_COL)?, ends(DST_INDEX_COL)?);
+        let key = if self.adj_list_type.by_source() {
+            &src
+        } else {
+            &dst
+        };
+        let vertex_count = self.vertex_count;
+        if let Some(&beyond) = key.values().iter().find(|&&id| id as u64 >= vertex_count) {
+            return Err(invalid(
+                &at,
+                format!("id {beyond} is not below the vertex count, {vertex_count}"),
+            ));
+        }
+        let mut columns: Vec<(Field, ArrayRef)> = vec![
+            (index_field(SRC_INDEX_COL), Arc::new(src.clone())),
+            (index_field(DST_INDEX_COL), Arc::new(dst.clone())),
+        ];
+        for group in &self.info.property_groups {
+            columns.extend(group_columns(&at, batch, group, &self.options.user_types)?);
+        }
+        let rows = batch_of(columns)?;
+        let size = self.vertex_chunk_size;
+        let ordered = self.adj_list_type.ordered();
+        let keys = key.values();
+        let mut begin = 0;
+        while begin < keys.len() {
+            let part = keys[begin] as u64 / size;
+            let end = begin
+                + keys[begin..]
+                    .iter()
+                    .take_while(|&&k| k as u64 / size == part)
+                    .count();
+            for &k in &keys[begin..end] {
+                let out_of_order = if ordered {
+                    k < self.last
+                } else {
+                    (k as u64 / size) < self.part
+                };
+                if out_of_order {
+                    return Err(invalid(
+                        &at,
+                        format!(
+                            "id {k} arrives after {}, out of the list's order",
+                            self.last
+                        ),
+                    ));
+                }
+                self.last = k;
+            }
+            if part < self.part {
+                return Err(invalid(
+                    &at,
+                    format!("part {part} arrives after part {}", self.part),
+                ));
+            }
+            self.advance_to(part).await?;
+            if ordered {
+                let first = (part * size) as i64;
+                for &k in &keys[begin..end] {
+                    self.degrees[(k - first) as usize] += 1;
+                }
+            }
+            let n = (end - begin) as u64;
+            self.pending.push(rows.slice(begin, end - begin));
+            self.pending_rows += n;
+            self.part_edges += n;
+            self.edges += n;
+            while self.pending_rows >= self.info.chunk_size {
+                self.flush(self.info.chunk_size).await?;
+            }
+            begin = end;
+        }
+        Ok(())
+    }
+
+    /// Closes parts until `part` is the one being filled.
+    async fn advance_to(&mut self, part: u64) -> Result<(), Error> {
+        while self.part < part {
+            self.close_part().await?;
+            self.part += 1;
+            self.start_part();
+        }
+        Ok(())
+    }
+
+    /// The part's last chunk, its count, and for an ordered list its offset chunk.
+    async fn close_part(&mut self) -> Result<(), Error> {
+        if self.pending_rows > 0 {
+            self.flush(self.pending_rows).await?;
+        }
+        put_count(
+            self.store,
+            &self.root,
+            &paths::edge_count(self.info, self.adj, self.part),
+            self.part_edges,
         )
         .await?;
-        if adj_list_type.ordered() {
+        if self.adj_list_type.ordered() {
             // C++ `EdgesBuilder::getOffsetTable`: for each vertex of the chunk, the number of the
             // part's edges whose end is at or before it.
-            let ids = &key.values()[begin as usize..end as usize];
-            let last_vertex = (first_vertex + vertex_chunk_size).min(vertex_count);
-            let mut seen = 0usize;
+            let mut seen = 0;
             let offsets = Int64Array::from_iter_values(std::iter::once(0).chain(
-                (first_vertex..last_vertex).map(|v| {
-                    seen += ids[seen..].iter().take_while(|&&id| id as u64 <= v).count();
-                    seen as i64
+                self.degrees.iter().map(|d| {
+                    seen += d;
+                    seen
                 }),
             ));
             let batch = batch_of(vec![(index_field(OFFSET_COL), Arc::new(offsets))])?;
             put_parquet(
-                store,
-                root,
-                &paths::offset_chunk(info, adj, part),
+                self.store,
+                &self.root,
+                &paths::offset_chunk(self.info, self.adj, self.part),
                 &batch,
-                &options.props,
+                &self.options.props,
             )
             .await?;
         }
-        for chunk in 0..chunks(end - begin, info.chunk_size) {
-            let from = begin + chunk * info.chunk_size;
-            let rows = sorted.slice(from as usize, info.chunk_size.min(end - from) as usize);
-            let adj_list = rows.project(&[0, 1])?;
-            put_parquet(
-                store,
-                root,
-                &paths::adj_list_chunk(info, adj, part, chunk),
-                &adj_list,
-                &options.props,
-            )
-            .await?;
-            let mut column = 2;
-            for (group, &width) in info.property_groups.iter().zip(&grouped) {
-                let projection: Vec<usize> = (column..column + width).collect();
-                column += width;
-                let path = paths::edge_property_chunk(info, adj, group, part, chunk);
-                put_parquet(
-                    store,
-                    root,
-                    &path,
-                    &rows.project(&projection)?,
-                    &options.props,
-                )
-                .await?;
-            }
-        }
-        begin = end;
+        Ok(())
     }
-    debug_assert_eq!(begin, edges);
-    put_count(
-        store,
-        root,
-        &paths::edge_vertex_count(info, adj),
-        vertex_count,
-    )
-    .await?;
-    Ok(edges)
+
+    /// Writes the first `len` pending edges as the part's next chunk.
+    async fn flush(&mut self, len: u64) -> Result<(), Error> {
+        let pending = one(&self.at, &self.pending)?;
+        let rows = pending.slice(0, len as usize);
+        put_parquet(
+            self.store,
+            &self.root,
+            &paths::adj_list_chunk(self.info, self.adj, self.part, self.chunk),
+            &rows.project(&[0, 1])?,
+            &self.options.props,
+        )
+        .await?;
+        let mut column = 2;
+        for group in &self.info.property_groups {
+            let width = group.properties.len();
+            let projection: Vec<usize> = (column..column + width).collect();
+            column += width;
+            let path =
+                paths::edge_property_chunk(self.info, self.adj, group, self.part, self.chunk);
+            put_parquet(
+                self.store,
+                &self.root,
+                &path,
+                &rows.project(&projection)?,
+                &self.options.props,
+            )
+            .await?;
+        }
+        let rest = pending.num_rows() as u64 - len;
+        self.pending = if rest == 0 {
+            Vec::new()
+        } else {
+            vec![pending.slice(len as usize, rest as usize)]
+        };
+        self.pending_rows = rest;
+        self.chunk += 1;
+        Ok(())
+    }
+
+    /// Closes the last part, writes a count and an offset chunk for every part no edge reached,
+    /// then the list's `vertex_count`, and returns the number of edges.
+    ///
+    /// # Errors
+    ///
+    /// The store's refusal.
+    pub async fn finish(mut self) -> Result<u64, Error> {
+        let parts = chunks(self.vertex_count, self.vertex_chunk_size);
+        self.advance_to(parts).await?;
+        put_count(
+            self.store,
+            &self.root,
+            &paths::edge_vertex_count(self.info, self.adj),
+            self.vertex_count,
+        )
+        .await?;
+        Ok(self.edges)
+    }
 }
 
 /// **Commits a graph**: writes every information file under `root` — here the directory of the
