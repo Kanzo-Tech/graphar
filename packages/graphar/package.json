@@ -1,0 +1,59 @@
+{
+  "name": "@kanzo-tech/graphar",
+  "version": "0.1.0-alpha.1",
+  "description": "An Apache GraphAr graph attached to the host's DuckDB and read as a Graph: its types, properties and their Parquet statistics, a vertex, the edges of a type or at a vertex, search, and patterns across types as SQL, over a view per vertex and edge type; and, for a graph whose document names an RML-Core mapping, the graph read as RDF: its types with their IRIs and labels, and triple patterns as SQL over the views. No engine of its own: everything but `/write` is TypeScript, and `/write` loads graphar-rdf's writer built for wasm32.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kanzo-Tech/graphar.git",
+    "directory": "packages/graphar"
+  },
+  "keywords": [
+    "graphar",
+    "graph",
+    "property-graph",
+    "duckdb",
+    "parquet",
+    "rdf",
+    "rml"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./write": {
+      "types": "./dist/write.d.ts",
+      "import": "./dist/write.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "pkg/"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@rdfjs/types": "2.0.1",
+    "js-yaml": "5.4.2",
+    "n3": "2.13.12"
+  },
+  "devDependencies": {
+    "@duckdb/node-api": "1.5.5-r.5",
+    "@types/n3": "1.26.5",
+    "@types/node": "^22.0.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

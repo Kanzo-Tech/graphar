@@ -21,7 +21,7 @@ bytes.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-arrow-buffer = "58"
+arrow-buffer = "60"
 # The tests drive the async API with a plain executor: the crate itself needs no runtime.
 futures = { version = "0.3", default-features = false, features = ["executor"] }
 # `snap` reads GraphAr's own test data, and `zstd` is what fossil writes with.

@@ -15,7 +15,9 @@
 //!
 //! **No runtime.** Parquet's `async` and `object_store` features both bring `tokio`, so a chunk
 //! is encoded in memory with the synchronous writer and put whole, and read whole before it is
-//! decoded. A chunk is at most `chunk_size` rows by construction, which is what bounds it. The
+//! decoded. A chunk is at most `chunk_size` rows by construction, which is what bounds it, and a
+//! writer can hand the tables over a chunk at a time: [`write_vertices`] from a given chunk,
+//! [`write_edges`] over a given range of vertex chunks, and each count once they are all written. The
 //! crate builds for `wasm32-unknown-unknown`, and its normal dependencies reach no `tokio`.
 //!
 //! **Compression is the caller's.** [`WriterProperties`](parquet::file::properties::WriterProperties)
@@ -35,7 +37,9 @@ pub use error::Error;
 pub use read::{
     read_adj_list_chunk, read_count, read_edge_property_chunk, read_offsets, read_vertex_chunk,
 };
-pub use write::{write_edges, write_info, write_vertices};
+pub use write::{
+    write_edge_vertex_count, write_edges, write_info, write_vertex_count, write_vertices,
+};
 
 /// The internal vertex id in every vertex chunk: `int64`, the row of the vertex in its type's
 /// logical table. C++ `GeneralParams::kVertexIndexCol`.

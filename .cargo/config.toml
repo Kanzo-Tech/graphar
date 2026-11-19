@@ -1,0 +1,4 @@
+# getrandom 0.3 picks its wasm32-unknown-unknown source by this cfg, beside its `wasm_js` feature
+# (graphar-rdf's Cargo.toml says why it is reached).
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
