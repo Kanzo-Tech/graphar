@@ -9,7 +9,7 @@ import { join, resolve as resolvePath } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { attachGraph, GraphArError, type Resolve } from '../src/index.js';
+import { attach, GraphArError, type Resolve } from '../src/index.js';
 import { engine } from './engine.js';
 
 const SAMPLE = resolvePath(import.meta.dirname, '../../../conformance/sample');
@@ -22,7 +22,7 @@ afterAll(() => Promise.all(temporary.map((d) => rm(d, { recursive: true, force: 
 
 /** A copy of the sample, with `edit` applied to one of its documents. */
 async function copy(file: string, edit: (text: string) => string, from = SAMPLE): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'graphar-duckdb-'));
+  const dir = await mkdtemp(join(tmpdir(), 'graphar-'));
   temporary.push(dir);
   await cp(from, dir, { recursive: true });
   await writeFile(join(dir, file), edit(await readFile(join(dir, file), 'utf8')));
@@ -32,9 +32,9 @@ async function copy(file: string, edit: (text: string) => string, from = SAMPLE)
 const num = (rows: Record<string, unknown>[]) =>
   rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'bigint' ? Number(v) : v])));
 
-describe('attachGraph over the sample', async () => {
+describe('attach over the sample', async () => {
   const e = await engine();
-  const g = await attachGraph(e, 'g', under(SAMPLE), { entry });
+  const g = await attach(e, 'g', under(SAMPLE), { entry });
 
   it('describes the types in the order of the graph document', () => {
     expect(g.vertexTypes.map((v) => [v.type, v.count, v.table])).toEqual([
@@ -167,11 +167,11 @@ describe('attachGraph over the sample', async () => {
   });
 });
 
-describe('attachGraph', () => {
+describe('attach', () => {
   it('reads every file through the engine, a few statements and resolutions per attach', async () => {
     const e = await engine();
     const asked: (readonly string[])[] = [];
-    await using _g = await attachGraph(e, 'g', (paths) => (asked.push(paths), under(SAMPLE)(paths)), { entry });
+    await using _g = await attach(e, 'g', (paths) => (asked.push(paths), under(SAMPLE)(paths)), { entry });
     // The graph document; the documents it names; the type counts; the part counts; the chunks.
     expect(asked.length).toBe(5);
     expect(asked[0]).toEqual([entry]);
@@ -183,8 +183,8 @@ describe('attachGraph', () => {
 
   it('keeps a catalog two attachments share until the last detaches', async () => {
     const e = await engine();
-    const one = await attachGraph(e, 'shared', under(SAMPLE), { entry });
-    const two = await attachGraph(e, 'shared', under(SAMPLE), { entry });
+    const one = await attach(e, 'shared', under(SAMPLE), { entry });
+    const two = await attach(e, 'shared', under(SAMPLE), { entry });
     await one.detach();
     expect(await e.rows(`SELECT count(*)::INTEGER AS n FROM "shared"."person"`)).toEqual([{ n: 7 }]);
     await two.detach();
@@ -194,7 +194,7 @@ describe('attachGraph', () => {
   it('reads a graph under a directory of the entry', async () => {
     const e = await engine();
     const parent = resolvePath(SAMPLE, '..');
-    await using g = await attachGraph(e, 'sub', under(parent), { entry: 'sample/sample.graph.yml' });
+    await using g = await attach(e, 'sub', under(parent), { entry: 'sample/sample.graph.yml' });
     expect(await e.rows(`SELECT count(*)::INTEGER AS n FROM "sub"."person_knows_person"`)).toEqual([{ n: 8 }]);
     expect(g.vertexTypes).toHaveLength(3);
   });
@@ -205,7 +205,7 @@ describe('attachGraph', () => {
     await writeFile(join(dir, 'vertex/nickname/vertex_count'), zero);
     for (const p of [0, 1, 2]) await writeFile(join(dir, `edge/person_created_software/ordered_by_source/edge_count${p}`), zero);
     const e = await engine();
-    await using _g = await attachGraph(e, 'empty', under(dir), { entry });
+    await using _g = await attach(e, 'empty', under(dir), { entry });
     expect(await e.rows(`SELECT count(*)::INTEGER AS n FROM "empty"."nickname"`)).toEqual([{ n: 0 }]);
     expect(await e.rows(`SELECT column_name, column_type AS data_type FROM (DESCRIBE "empty"."nickname")`)).toEqual([
       { column_name: '_graphArVertexIndex', data_type: 'BIGINT' },
@@ -225,7 +225,7 @@ describe('attachGraph', () => {
 
   const refusal = async (dir: string, code: GraphArError['code'], message: RegExp) => {
     const e = await engine();
-    const attaching = attachGraph(e, 'bad', under(dir), { entry });
+    const attaching = attach(e, 'bad', under(dir), { entry });
     await expect(attaching).rejects.toBeInstanceOf(GraphArError);
     await expect(attaching).rejects.toMatchObject({ code, message: expect.stringMatching(message) });
     // Nothing is left behind.
@@ -261,19 +261,19 @@ describe('attachGraph', () => {
     const e = await engine();
     const stop = new AbortController();
     const reason = new Error('stopped');
-    const attaching = attachGraph(e, 'stopped', (paths) => (stop.abort(reason), under(SAMPLE)(paths)), { entry, signal: stop.signal });
+    const attaching = attach(e, 'stopped', (paths) => (stop.abort(reason), under(SAMPLE)(paths)), { entry, signal: stop.signal });
     await expect(attaching).rejects.toBe(reason);
   });
 });
 
-describe('attachGraph over user_defined: a list of a user-defined type', () => {
+describe('attach over user_defined: a list of a user-defined type', () => {
   // `gar/v1 (langString)` declares the type; GraphAr gives it no storage. graphar-parquet wrote it
   // as LIST<STRUCT<value: STRING, lang: STRING>>, and the view reads that from the file.
   const user = 'user_defined.graph.yml';
 
   it('reads the column as a DuckDB LIST of STRUCT, and says its type in GraphAr\'s words', async () => {
     const e = await engine();
-    await using g = await attachGraph(e, 'u', under(USER_DEFINED), { entry: user });
+    await using g = await attach(e, 'u', under(USER_DEFINED), { entry: user });
     expect(g.vertexTypes[0]!.properties.find((p) => p.name === 'labels')).toEqual({
       name: 'labels', type: 'STRUCT("value" VARCHAR, lang VARCHAR)[]', primary: false, nullable: true, list: true,
     });
@@ -302,18 +302,18 @@ describe('attachGraph over user_defined: a list of a user-defined type', () => {
     const dir = await copy('concept.vertex.yml', (t) => t, USER_DEFINED);
     await writeFile(join(dir, 'vertex/concept/vertex_count'), Buffer.alloc(8));
     const e = await engine();
-    const without = attachGraph(e, 'u', under(dir), { entry: user });
+    const without = attach(e, 'u', under(dir), { entry: user });
     await expect(without).rejects.toMatchObject({ code: 'unsupported', message: expect.stringMatching(/`langString` has no DuckDB type/) });
 
     const userTypes = { langString: 'STRUCT(value VARCHAR, lang VARCHAR)' };
-    await using _g = await attachGraph(e, 'u', under(dir), { entry: user, userTypes });
+    await using _g = await attach(e, 'u', under(dir), { entry: user, userTypes });
     expect(await e.rows(`SELECT column_type FROM (DESCRIBE "u"."concept") WHERE column_name = 'labels'`)).toEqual([
       { column_type: 'STRUCT("value" VARCHAR, lang VARCHAR)[]' },
     ]);
   });
 });
 
-describe('attachGraph and the internal vertex id', () => {
+describe('attach and the internal vertex id', () => {
   // "starting from 0, corresponding to the row number of the vertex in the logical vertex table"
   // (format.md): a gap would make a prefix-sum global id collide with the next type's first.
   it('refuses a type whose ids have a gap, naming it', async () => {
@@ -323,7 +323,7 @@ describe('attachGraph and the internal vertex id', () => {
     const chunk = join(dir, 'vertex/person/id/chunk2');
     await e.rows(`COPY (SELECT _graphArVertexIndex + 1 AS _graphArVertexIndex, id FROM read_parquet('${chunk}')) TO '${chunk}.new' (FORMAT parquet)`);
     await rename(`${chunk}.new`, chunk);
-    const attaching = attachGraph(e, 'gap', under(dir), { entry });
+    const attaching = attach(e, 'gap', under(dir), { entry });
     await expect(attaching).rejects.toMatchObject({ code: 'invalid', document: 'person' });
     await expect(attaching).rejects.toThrow(/vertex `person`.*not continuous.*ids from 0 to 7/);
     expect(await e.rows(`SELECT count(*)::INTEGER AS n FROM duckdb_databases() WHERE database_name = 'gap'`)).toEqual([{ n: 0 }]);
@@ -337,9 +337,9 @@ describe('attachGraph and the internal vertex id', () => {
       await e.rows(`COPY (SELECT _graphArVertexIndex + 1 AS _graphArVertexIndex, id FROM read_parquet('${chunk}')) TO '${chunk}.new' (FORMAT parquet)`);
       await rename(`${chunk}.new`, chunk);
     }
-    await expect(attachGraph(e, 'a', under(shifted), { entry })).rejects.toMatchObject({ code: 'invalid', document: 'person' });
+    await expect(attach(e, 'a', under(shifted), { entry })).rejects.toMatchObject({ code: 'invalid', document: 'person' });
     const short = await copy(entry, (t) => t);
     await writeFile(join(short, 'vertex/software/vertex_count'), Buffer.from([4, 0, 0, 0, 0, 0, 0, 0]));
-    await expect(attachGraph(e, 'b', under(short), { entry })).rejects.toMatchObject({ code: 'invalid', document: 'software' });
+    await expect(attach(e, 'b', under(short), { entry })).rejects.toMatchObject({ code: 'invalid', document: 'software' });
   });
 });

@@ -16,7 +16,7 @@
  */
 export type GraphArErrorCode = 'unreadable' | 'unparseable' | 'invalid' | 'unsupported' | 'duplicate' | 'engine' | 'unknown' | 'ambiguous';
 
-/** Everything `attachGraph`, `attachRdfGraph` and a `Graph` throw but an abort, which rejects with the signal's reason. */
+/** Everything `attach` and a `Graph` throw but an abort, which rejects with the signal's reason. */
 export class GraphArError extends Error {
   override readonly name = 'GraphArError';
   /** The document or file it is about, when there is one. */

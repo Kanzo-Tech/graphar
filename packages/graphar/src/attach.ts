@@ -4,6 +4,7 @@
  */
 
 import { GraphArError } from './error.js';
+import { rdfOf } from './rdf.js';
 import { type Graph, type Property as GraphProperty, type Stats, graphOf } from './graph.js';
 import {
   type AdjacentList,
@@ -42,7 +43,7 @@ export interface Table {
  */
 export type Resolve = (paths: readonly string[]) => readonly string[] | Promise<readonly string[]>;
 
-/** What {@link attachGraph} takes besides the engine, the catalog and the resolver. */
+/** What {@link attach} takes besides the engine, the catalog and the resolver. */
 export interface AttachOptions {
   /** The graph document, relative to what {@link Resolve} resolves against: `sample.graph.yml`. */
   readonly entry: string;
@@ -186,7 +187,7 @@ export function reader(engine: Engine, resolve: Resolve, signal: AbortSignal | u
  * and column a query needs, so a consumer writes none of the format's.
  *
  * ```ts
- * await using g = await attachGraph(engine, 'job', (paths) => paths.map((p) => `${url}/${p}`), { entry: 'fossil.graph.yml' });
+ * await using g = await attach(engine, 'job', (paths) => paths.map((p) => `${url}/${p}`), { entry: 'fossil.graph.yml' });
  * const { sql } = g.match([{ as: 'p', type: 'person' }, { edge: 'created' }, { as: 's', type: 'software' }], { columns: ['p.name', 's.name'] });
  * ```
  *
@@ -229,11 +230,16 @@ export function reader(engine: Engine, resolve: Resolve, signal: AbortSignal | u
  * specification numbers vertices from 0 by row, and a global id built as a prefix sum of the counts
  * plus this index is injective only without gaps. The check reads the chunks' footers.
  *
+ * **RDF.** A graph whose document's `extra_info` names an RML-Core mapping under `mapping` — every
+ * graph `graphar-rdf` writes — is also read as RDF: {@link Graph.rdf}. The file says so, not the
+ * caller: there is one way to attach a graph.
+ *
  * @throws {GraphArError} before any view is made, for what the files hold (`unreadable`,
- *   `unparseable`, `invalid`, `unsupported`, `duplicate`); `engine` when a view is refused. An abort
+ *   `unparseable`, `invalid`, `unsupported`, `duplicate`); `engine` when a view is refused; what
+ *   reading the mapping and the shapes throws (`rdfOf`). An abort
  *   rejects with the signal's reason. Either way the catalog is given back.
  */
-export async function attachGraph(
+export async function attach(
   engine: Engine,
   catalog: string,
   resolve: Resolve,
@@ -529,7 +535,7 @@ export async function attachGraph(
       };
     });
   const table = (name: string) => `${ident(catalog)}.${ident(name)}`;
-  return graphOf({
+  const tables = graphOf({
     engine,
     vertexTypes: vertices.map((v, i) => ({
       type: v.type, count: vertexCounts[i]!, table: table(v.type), index: VERTEX_INDEX_COL,
@@ -543,4 +549,11 @@ export async function attachGraph(
     })),
     detach,
   });
+  try {
+    const rdf = await rdfOf(engine, tables, { run, names, texts, counts }, base, graph.extra_info);
+    return rdf === undefined ? tables : { ...tables, rdf };
+  } catch (cause) {
+    await detach().catch(() => {});
+    throw cause;
+  }
 }

@@ -1,6 +1,6 @@
 //! Writes the graphs of the tests under a directory: `conformance/sample/`, which GraphAr's own
-//! C++ reader and `graphar-duckdb` open, and `conformance/user_defined/`, which C++ refuses and
-//! `graphar-duckdb` opens.
+//! C++ reader and `@kanzo-tech/graphar` open, and `conformance/user_defined/`, which C++ refuses and
+//! `@kanzo-tech/graphar` opens.
 //!
 //! ```sh
 //! cargo run -p graphar-parquet --example sample -- conformance

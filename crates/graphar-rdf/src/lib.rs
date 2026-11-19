@@ -86,8 +86,11 @@ pub const SHACL_FILE: &str = "shapes.ttl";
 pub const SHEXC_FILE: &str = "shapes.shex";
 /// The name [`write()`] saves a ShEx schema in ShExJ as.
 pub const SHEXJ_FILE: &str = "shapes.shexj";
+/// The graph document's `extra_info` key whose value is [`MAPPING_FILE`]: a reader that finds it
+/// reads the graph as RDF through that mapping.
+pub const MAPPING_KEY: &str = "mapping";
 /// The graph document's `extra_info` key whose value is the name of the shape document saved
-/// beside the graph, one of the three above; absent when none was.
+/// beside the graph, one of the three above.
 pub const SHAPES_KEY: &str = "shapes";
 /// `dct:conformsTo`: the shape the subjects of a vertex type's triples map conform to.
 pub const DCT_CONFORMS_TO: &str = "http://purl.org/dc/terms/conformsTo";

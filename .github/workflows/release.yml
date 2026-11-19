@@ -2,7 +2,7 @@ name: release
 
 # Publishes when a GitHub Release is published: `graphar-info`, `graphar-parquet` and
 # `graphar-rdf` to crates.io,
-# and `@kanzo-tech/graphar-duckdb` to npm. The release is the decision, made by a person, and this
+# and `@kanzo-tech/graphar` to npm. The release is the decision, made by a person, and this
 # workflow only carries it out: no version PR, no CHANGELOG. The release body is the release notes.
 #
 # THE TAG DECIDES THE VERSION, and `check` refuses a tag that disagrees with the committed

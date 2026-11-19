@@ -1,18 +1,20 @@
 /**
- * An RDF graph `graphar-rdf` wrote, attached as a {@link Graph} and read with what its mapping
- * says: how each table and column becomes triples. Labels are not the mapping's but the shapes',
- * and are read from the shape document the writer saved beside the graph.
+ * A graph read as RDF, with what its mapping says: how each table and column becomes triples.
+ * Labels are not the mapping's but the shapes', and are read from the shape document saved beside
+ * the graph.
  */
 
-import type { NamedNode, Quad, Quad_Object, Quad_Subject } from '@rdfjs/types';
+import type { Literal, NamedNode, Quad, Quad_Object, Quad_Subject } from '@rdfjs/types';
 import { DataFactory, Parser } from 'n3';
 
-import { type AttachOptions, type Engine, type Resolve, attachGraph, ident, lit, reader } from './attach.js';
+import { type Engine, type Reader, ident, lit } from './attach.js';
 import { GraphArError } from './error.js';
 import type { EdgeType, Graph, Property, Signal, VertexType } from './graph.js';
 
-/** The RML-Core mapping `graphar-rdf` writes beside the information files. */
+/** The RML-Core mapping `graphar-rdf` saves beside the information files. */
 export const MAPPING_FILE = 'mapping.ttl';
+/** The graph document's `extra_info` key naming the RML-Core mapping saved beside the graph. */
+export const MAPPING_KEY = 'mapping';
 /** The graph document's `extra_info` key naming the shape document saved beside the graph. */
 export const SHAPES_KEY = 'shapes';
 
@@ -20,21 +22,46 @@ export const SHAPES_KEY = 'shapes';
 const SHAPE_FILES = { 'shapes.ttl': 'shacl', 'shapes.shex': 'shexc', 'shapes.shexj': 'shexj' } as const;
 
 /**
- * An attached RDF graph: a {@link Graph} whose types and properties say what the mapping says of
- * them, and the graph read back as RDF.
+ * A graph read as RDF: its types and properties with what the mapping says of them, and its
+ * triples. {@link Graph.rdf}, for a graph whose document names a mapping.
  */
-export interface RdfGraph extends Graph {
+export interface Rdf {
+  /** The graph's vertex types, in its order, each with its class, shape and labels. */
   readonly vertexTypes: readonly RdfVertexType[];
+  /** The graph's edge types, in its order, each with its predicate. */
   readonly edgeTypes: readonly RdfEdgeType[];
   /**
-   * The graph read as RDF: every triples map of the mapping evaluated on the host's DuckDB, its
-   * logical source run over the graph's views, in the order the mapping lists them. A literal
+   * The triples that match `pattern`, as one SQL query over the graph's views: a row per triple,
+   * with the columns {@link TRIPLE_COLUMNS}, every one `VARCHAR`. Only the triples maps that can
+   * make such a triple are read, and a bound subject or object is a filter on its column: the
+   * mapping read backwards. Without a pattern, every triple. The query composes with any other
+   * SQL on the engine.
+   */
+  match(pattern?: TriplePattern): { readonly sql: string };
+  /**
+   * The triples that match `pattern`, {@link Rdf.match} run on the engine, as terms. A literal
    * reads in its canonical lexical form: the writer stored its value.
    */
-  triples(options?: Signal): AsyncIterable<Quad>;
-  /** The shape document the graph conforms to, as the writer saved it; absent when it saved none. */
+  triples(pattern?: TriplePattern, options?: Signal): AsyncIterable<Quad>;
+  /** The RML-Core mapping, as it was saved. */
+  readonly mapping: string;
+  /** The shape document the graph conforms to, as it was saved; absent when none was. */
   readonly shapes?: Shapes;
 }
+
+/** A triple pattern: each position bound to a term, or free when absent. */
+export interface TriplePattern {
+  readonly subject?: NamedNode;
+  readonly predicate?: NamedNode;
+  readonly object?: NamedNode | Literal;
+}
+
+/**
+ * The columns of {@link Rdf.match}: the subject's IRI, the predicate's, the object's IRI or
+ * lexical form, the object's term type (`IRI` or `Literal`), a literal's datatype, and a
+ * language-tagged string's tag.
+ */
+export const TRIPLE_COLUMNS = ['subject', 'predicate', 'object', 'term_type', 'datatype', 'language'] as const;
 
 /** A shape document, as the writer saved it. */
 export interface Shapes {
@@ -331,71 +358,64 @@ function shexjLabels(text: string, document: string): Labels {
 }
 
 /**
- * **Attach an RDF graph `graphar-rdf` wrote**, as {@link attachGraph} attaches any GraphAr graph,
- * and answer it as an {@link RdfGraph}: each type and property with what `mapping.ttl` says of it
- * and the labels its shape document gives, and its triples.
+ * **The RDF reading of an attached graph** whose document names a mapping under {@link MAPPING_KEY}:
+ * each type and property with what the mapping says of it and the labels its shape document gives,
+ * and its triples.
  *
- * `mapping.ttl` is read beside the graph document, through the engine like every other file, and
+ * The mapping is read beside the graph document, through the engine like every other file, and
  * parsed as Turtle; only the RML-Core subset `graphar-rdf` writes is read. A triples map is named by
  * the GraphAr names it reads — `<#Person>`, `<#Person/nick>`, `<#Person_knows_Person>` — so each is
  * matched to its type, column or edge type by its name, never by reading its SQL.
  *
- * The shape document is the one the graph document's `extra_info` names under `shapes`:
- * `shapes.ttl` (SHACL: `sh:name`, `sh:description`), `shapes.shexj` (ShExJ: `rdfs:label`,
- * `rdfs:comment` annotations) or `shapes.shex` (ShExC, whose annotations are not read: there is no
- * ShExC parser here). Without shapes there are no labels: a consumer shows an IRI's local name.
+ * The shape document is the one `extra_info` names under {@link SHAPES_KEY}: `shapes.ttl` (SHACL:
+ * `sh:name`, `sh:description`), `shapes.shexj` (ShExJ: `rdfs:label`, `rdfs:comment` annotations) or
+ * `shapes.shex` (ShExC, whose annotations are not read: there is no ShExC parser here). Without
+ * shapes there are no labels: a consumer shows an IRI's local name.
  *
- * {@link RdfGraph.triples} runs the SQL `mapping.ttl` holds, so a graph is as trusted as the code
- * it would run: the host's engine decides what a statement may reach.
+ * {@link Rdf.triples} runs the SQL the mapping holds, so a graph is as trusted as the code it would
+ * run: the host's engine decides what a statement may reach.
  *
- * @throws {GraphArError} `unreadable` for a graph with no `mapping.ttl`, which is not one
- *   `graphar-rdf` wrote; `unparseable` for a mapping or a shape document that does not parse;
- *   `unsupported` for a mapping outside the subset `graphar-rdf` writes; `invalid` for one that does
- *   not map the graph's types; and what {@link attachGraph} throws. The catalog is given back.
+ * @throws {GraphArError} `unreadable` for a mapping or shape document that does not read;
+ *   `unparseable` for one that does not parse; `unsupported` for a mapping outside the subset
+ *   `graphar-rdf` writes; `invalid` for one that does not map the graph's types, or an `extra_info`
+ *   naming a file `graphar-rdf` does not write.
  */
-export async function attachRdfGraph(engine: Engine, catalog: string, resolve: Resolve, options: AttachOptions): Promise<RdfGraph> {
-  const { entry, signal } = options;
-  const base = entry.slice(0, entry.lastIndexOf('/') + 1);
-  const files = reader(engine, resolve, signal);
-  let mapping: string;
-  try {
-    [mapping] = (await files.texts([base + MAPPING_FILE])) as [string];
-  } catch (cause) {
-    if (!(cause instanceof GraphArError)) throw cause;
-    throw new GraphArError('unreadable', `${base + MAPPING_FILE}: did not read, and every graph graphar-rdf writes has one`, {
-      document: base + MAPPING_FILE,
-      cause,
-    });
+export async function rdfOf(
+  engine: Engine,
+  graph: Graph,
+  files: Reader,
+  base: string,
+  extra: readonly (readonly [string, string])[],
+): Promise<Rdf | undefined> {
+  const named = (key: string) => extra.find(([k]) => k === key)?.[1];
+  const file = named(MAPPING_KEY);
+  if (file === undefined) return undefined;
+  if (file !== MAPPING_FILE) {
+    throw new GraphArError('invalid', `extra_info \`${MAPPING_KEY}\` names \`${file}\`, not the \`${MAPPING_FILE}\` graphar-rdf writes`);
   }
+  const [mapping] = (await files.texts([base + MAPPING_FILE])) as [string];
   const maps = triplesMaps(mapping);
-
-  const graph = await attachGraph(engine, catalog, resolve, options);
-  try {
-    const extra = await files.run(
-      `SELECT value FROM ${ident(catalog)}.graphar_extra_info WHERE key = ${lit(SHAPES_KEY)}`,
-      (cause) => new GraphArError('engine', `the extra_info of ${catalog} did not read`, { cause }),
-    );
-    let shapes: Shapes | undefined;
-    let labels = NONE;
-    if (extra.numRows > 0) {
-      const file = String(extra.getChild('value')?.get(0));
-      const syntax = Object.hasOwn(SHAPE_FILES, file) ? SHAPE_FILES[file as keyof typeof SHAPE_FILES] : undefined;
-      if (syntax === undefined) {
-        throw new GraphArError('invalid', `${entry}: extra_info \`${SHAPES_KEY}\` names \`${file}\`, no shape document graphar-rdf writes`, { document: entry });
-      }
-      const [text] = (await files.texts([base + file])) as [string];
-      shapes = { syntax, text };
-      labels = syntax === 'shacl' ? shaclLabels(text, base + file) : syntax === 'shexj' ? shexjLabels(text, base + file) : NONE;
+  let shapes: Shapes | undefined;
+  let labels = NONE;
+  const shapeFile = named(SHAPES_KEY);
+  if (shapeFile !== undefined) {
+    const syntax = Object.hasOwn(SHAPE_FILES, shapeFile) ? SHAPE_FILES[shapeFile as keyof typeof SHAPE_FILES] : undefined;
+    if (syntax === undefined) {
+      throw new GraphArError('invalid', `extra_info \`${SHAPES_KEY}\` names \`${shapeFile}\`, no shape document graphar-rdf writes`);
     }
-    return rdfGraph(engine, graph, maps, labels, shapes);
-  } catch (cause) {
-    await graph.detach().catch(() => {});
-    throw cause;
+    const [text] = (await files.texts([base + shapeFile])) as [string];
+    shapes = { syntax, text };
+    labels = syntax === 'shacl' ? shaclLabels(text, base + shapeFile) : syntax === 'shexj' ? shexjLabels(text, base + shapeFile) : NONE;
   }
+  return rdf(engine, graph, maps, labels, mapping, shapes);
 }
 
-/** The {@link RdfGraph} of an attached graph and its triples maps. */
-function rdfGraph(engine: Engine, graph: Graph, maps: readonly TriplesMap[], labels: Labels, shapes: Shapes | undefined): RdfGraph {
+/** A literal's datatype as {@link TRIPLE_COLUMNS} gives it: a tagged string's is `rdf:langString`. */
+const datatypeOf = (o: ObjectMap): string | undefined =>
+  o.termType === 'IRI' ? undefined : o.language !== undefined ? RDF_LANG_STRING : (o.datatype ?? XSD_STRING);
+
+/** The {@link Rdf} of an attached graph and its triples maps. */
+function rdf(engine: Engine, graph: Graph, maps: readonly TriplesMap[], labels: Labels, mapping: string, shapes: Shapes | undefined): Rdf {
   const key = (name: readonly string[]) => name.join('/');
   const byName = new Map(maps.map((m) => [key(m.name), m]));
   for (const m of maps) {
@@ -422,7 +442,7 @@ function rdfGraph(engine: Engine, graph: Graph, maps: readonly TriplesMap[], lab
         if (subjects.has(p.name)) return { ...p, termType: 'IRI' };
         throw invalid(`no triples map reads \`${v.type}\`.\`${p.name}\``);
       }
-      const datatype = object.termType === 'IRI' ? undefined : object.language !== undefined ? RDF_LANG_STRING : (object.datatype ?? XSD_STRING);
+      const datatype = datatypeOf(object);
       return {
         ...p,
         iri: object.predicate,
@@ -443,57 +463,84 @@ function rdfGraph(engine: Engine, graph: Graph, maps: readonly TriplesMap[], lab
   });
 
   // The mapping's logical tables are the graph's relations by name (`rml:source` is an anonymous
-  // `rml:Source`: the host binds the tables). Each statement binds them to the catalog's views as
-  // its own common table expressions, which a table name in the query resolves to before any table:
-  // nothing is set on the engine, and the mapping's SQL is run as it is written.
+  // `rml:Source`: the host binds the tables). The query binds them to the catalog's views as its
+  // own common table expressions, which a table name in it resolves to before any table: nothing
+  // is set on the engine, and the mapping's SQL is run as it is written.
   const relations = [...graph.vertexTypes.map((v) => [v.type, v.table] as const), ...graph.edgeTypes.map((e) => [e.name, e.table] as const)];
   const bound = relations.length === 0 ? '' : `WITH ${relations.map(([name, table]) => `${ident(name)} AS (SELECT * FROM ${table})`).join(', ')} `;
-  const quiet = new AbortController().signal;
-  async function* triples(options: Signal = {}): AsyncIterable<Quad> {
-    const { signal } = options;
-    const { namedNode, literal, quad } = DataFactory;
-    const type = namedNode(RDF_TYPE);
+  const text = (sql: string) => `CAST(${sql} AS VARCHAR)`;
+  const row = (subject: string, predicate: string, object: string, termType: string, datatype: string, language: string) =>
+    `SELECT ${[subject, predicate, object, termType, datatype, language].map((c, i) => `${c} AS ${TRIPLE_COLUMNS[i]}`).join(', ')}`;
+  const NULL = 'CAST(NULL AS VARCHAR)';
+
+  function match(pattern: TriplePattern = {}): { readonly sql: string } {
+    const { subject, predicate, object } = pattern;
+    const selects: string[] = [];
     for (const m of maps) {
-      const columns = [m.subject, ...m.objects.flatMap((o) => (o.language === undefined ? [o.reference] : [o.reference, o.language]))];
-      const select = columns.map((c, i) => `CAST(q.${c} AS VARCHAR) AS "c${i}"`).join(', ');
       const from = 'table' in m.source ? m.source.table : `(${m.source.query})`;
-      const sql = `${bound}SELECT ${select} FROM ${from} AS q`;
-      signal?.throwIfAborted();
-      let answer;
-      try {
-        answer = await engine.query(sql, { signal: signal ?? quiet });
-      } catch (cause) {
-        signal?.throwIfAborted();
-        throw new GraphArError('engine', `the triples map <#${key(m.name)}> did not run: ${sql.slice(0, 200)}`, { cause });
-      }
-      const cells = columns.map((_, i) => answer.getChild(`c${i}`));
-      const cell = (i: number, row: number): string | undefined => {
-        const v = cells[i]?.get(row);
-        return v === null || v === undefined ? undefined : String(v);
-      };
-      const classes = m.classes.map((c) => namedNode(c));
-      const objects = m.objects.map((o) => ({
-        ...o,
-        predicate: namedNode(o.predicate),
-        datatype: o.datatype === undefined || o.datatype === XSD_STRING ? undefined : namedNode(o.datatype),
-      }));
-      for (let row = 0; row < answer.numRows; row++) {
-        const s = cell(0, row);
-        if (s === undefined) continue;
-        const subject = namedNode(s);
-        for (const c of classes) yield quad(subject, type, c);
-        let i = 1;
-        for (const o of objects) {
-          const value = cell(i++, row);
-          const tag = o.language === undefined ? undefined : cell(i++, row);
-          if (value === undefined) continue;
-          if (o.termType === 'IRI') yield quad(subject, o.predicate, namedNode(value));
-          else if (o.language !== undefined) {
-            if (tag !== undefined) yield quad(subject, o.predicate, literal(value, tag));
-          } else yield quad(subject, o.predicate, o.datatype === undefined ? literal(value) : literal(value, o.datatype));
+      const s = text(`q.${m.subject}`);
+      const where = [`q.${m.subject} IS NOT NULL`, ...(subject === undefined ? [] : [`${s} = ${lit(subject.value)}`])];
+      // A class is a constant object: the pattern decides at once whether the map makes it.
+      if (predicate === undefined || predicate.value === RDF_TYPE) {
+        for (const c of m.classes) {
+          if (object !== undefined && !(object.termType === 'NamedNode' && object.value === c)) continue;
+          selects.push(`${row(s, lit(RDF_TYPE), lit(c), lit('IRI'), NULL, NULL)} FROM ${from} AS q WHERE ${where.join(' AND ')}`);
         }
       }
+      for (const o of m.objects) {
+        if (predicate !== undefined && predicate.value !== o.predicate) continue;
+        const datatype = datatypeOf(o);
+        const value = text(`q.${o.reference}`);
+        const tag = o.language === undefined ? NULL : text(`q.${o.language}`);
+        const filters = [...where, `q.${o.reference} IS NOT NULL`, ...(o.language === undefined ? [] : [`q.${o.language} IS NOT NULL`])];
+        if (object !== undefined) {
+          if (object.termType === 'NamedNode') {
+            if (o.termType !== 'IRI') continue;
+          } else {
+            if (o.termType !== 'Literal' || object.datatype.value !== datatype) continue;
+            if (o.language !== undefined) filters.push(`lower(${tag}) = ${lit(object.language.toLowerCase())}`);
+          }
+          filters.push(`${value} = ${lit(object.value)}`);
+        }
+        selects.push(
+          `${row(s, lit(o.predicate), value, lit(o.termType), datatype === undefined ? NULL : lit(datatype), tag)} FROM ${from} AS q WHERE ${filters.join(' AND ')}`,
+        );
+      }
+    }
+    const body = selects.length === 0 ? `${row(NULL, NULL, NULL, NULL, NULL, NULL)} WHERE false` : selects.join(' UNION ALL ');
+    return { sql: `${bound}${body}` };
+  }
+
+  const quiet = new AbortController().signal;
+  async function* triples(pattern: TriplePattern = {}, options: Signal = {}): AsyncIterable<Quad> {
+    const { signal } = options;
+    const { sql } = match(pattern);
+    signal?.throwIfAborted();
+    let answer;
+    try {
+      answer = await engine.query(sql, { signal: signal ?? quiet });
+    } catch (cause) {
+      signal?.throwIfAborted();
+      throw new GraphArError('engine', `the triples did not read: ${sql.slice(0, 200)}`, { cause });
+    }
+    const [s, p, o, t, d, l] = TRIPLE_COLUMNS.map((c) => answer.getChild(c));
+    const { namedNode, literal, quad } = DataFactory;
+    const nodes = new Map<string, NamedNode>();
+    const node = (iri: string) => nodes.get(iri) ?? (nodes.set(iri, namedNode(iri)), nodes.get(iri)!);
+    for (let i = 0; i < answer.numRows; i++) {
+      const value = String(o!.get(i));
+      const datatype = d!.get(i);
+      const language = l!.get(i);
+      const term =
+        t!.get(i) === 'IRI'
+          ? node(value)
+          : language !== null && language !== undefined
+            ? literal(value, String(language))
+            : datatype === XSD_STRING
+              ? literal(value)
+              : literal(value, node(String(datatype)));
+      yield quad(node(String(s!.get(i))), node(String(p!.get(i))), term);
     }
   }
-  return { ...graph, vertexTypes, edgeTypes, triples, ...(shapes === undefined ? {} : { shapes }) };
+  return { vertexTypes, edgeTypes, match, triples, mapping, ...(shapes === undefined ? {} : { shapes }) };
 }

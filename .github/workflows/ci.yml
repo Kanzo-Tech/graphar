@@ -52,8 +52,8 @@ jobs:
         env:
           GRAPHAR_TESTING: ${{ github.workspace }}/incubator-graphar-testing
         run: cargo test -p graphar-parquet --locked --test testing_data -- --ignored
-      # conformance/{sample,user_defined} are what the C++ reader below and graphar-duckdb's tests
-      # open, and conformance/rdf what attachRdfGraph's tests open: exactly what the writers write
+      # conformance/{sample,user_defined} are what the C++ reader below and @kanzo-tech/graphar's tests
+      # open, and conformance/rdf what attach's RDF tests open: exactly what the writers write
       # today, the RDF graphs from people.ttl and each of its three shape documents.
       - name: conformance graphs are the writer's
         run: |
@@ -109,7 +109,7 @@ jobs:
       - name: the plan of mapping.ttl as AlgeMapLoom translates it
         run: python3 -I conformance/rml/algemaploom.py people "$RUNNER_TEMP/mappingloom-rs/target/release/translator-bin"
 
-  # graphar-duckdb, tested on a native DuckDB against conformance/sample and conformance/rdf.
+  # @kanzo-tech/graphar, tested on a native DuckDB against conformance/sample and conformance/rdf.
   node:
     runs-on: ubuntu-latest
     steps:

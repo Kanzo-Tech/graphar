@@ -1,5 +1,5 @@
 /**
- * The `Graph` `attachGraph` answers, over `conformance/sample`: its values are
+ * The `Graph` `attach` answers, over `conformance/sample`: its values are
  * `crates/graphar-parquet/tests/sample/mod.rs`'s.
  */
 
@@ -7,7 +7,7 @@ import { resolve as resolvePath } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { attachGraph, GraphArError, type EdgeType, type VertexType } from '../src/index.js';
+import { attach, GraphArError, type EdgeType, type VertexType } from '../src/index.js';
 import { graphOf } from '../src/graph.js';
 import { engine } from './engine.js';
 
@@ -15,7 +15,7 @@ const SAMPLE = resolvePath(import.meta.dirname, '../../../conformance/sample');
 
 describe('Graph over the sample', async () => {
   const e = await engine();
-  const g = await attachGraph(e, 'g', (paths) => paths.map((p) => `${SAMPLE}/${p}`), { entry: 'sample.graph.yml' });
+  const g = await attach(e, 'g', (paths) => paths.map((p) => `${SAMPLE}/${p}`), { entry: 'sample.graph.yml' });
   const rows = async (sql: string) => (await e.rows(sql)).map((r) => Object.values(r));
 
   it('describes every property with its DuckDB type and its Parquet statistics', () => {

@@ -10,7 +10,7 @@ builds for `wasm32-unknown-unknown`.
 | [`graphar-info`](crates/graphar-info) | The information files: `GraphInfo`, `VertexInfo`, `EdgeInfo` and their parts, loaded from and dumped to YAML, and validated. No IO of its own |
 | [`graphar-parquet`](crates/graphar-parquet) | The data files in Parquet: vertex chunks, adjacency lists, offsets, edge properties and the count files, written and read through any [`object_store`](https://docs.rs/object_store), each chunk one row group whose Parquet `Statistics` carry its distinct counts. No runtime: its wasm32 build reaches no `tokio` |
 | [`graphar-rdf`](crates/graphar-rdf) | RDF in GraphAr: an RDF graph and its shapes (SHACL Core in Turtle, ShEx in ShExC or ShExJ, read by [rudof](https://github.com/rudof-project/rudof)) written as a vertex table per shape (the nodes of that shape) and an edge type per property between shapes, with the RDF reading of those tables as a plan in the mapping algebra of Min Oo and Hartig, written as RML-Core (`mapping.ttl`) and R2RML (`mapping.r2rml.ttl`). Only a graph that conforms to the closed reading of its shapes is written; `read` gives back the triples written, up to canonical lexical form |
-| [`@kanzo-tech/graphar-duckdb`](packages/graphar-duckdb) (npm) | `attachGraph`: a graph on a host's DuckDB, read through a `Graph` — its types and their properties with each one's statistics, a vertex, the edges of a type, the edges at a vertex, search, common values, and patterns across types as SQL (`match`, and `reach`, a filter on one type carried to another) — over a catalog of a view per vertex and edge type over the Parquet chunks, and the information files as `graphar_vertex_types`, `graphar_edge_types`, `graphar_properties`, `graphar_extra_info` and `graphar_chunks` (every chunk file, by the name the host resolved it to), and `graphar_column_stats`, each property's nulls, bounds and distinct count combined from its chunks' Parquet `Statistics`. `attachRdfGraph`: a graph `graphar-rdf` wrote, read through an `RdfGraph` — each type, property and edge type with its IRI, term type and datatype from `mapping.ttl`, its labels from the saved shapes, and `triples()`, the mapping evaluated on the host's DuckDB. TypeScript only: every file is read through the engine |
+| [`@kanzo-tech/graphar`](packages/graphar) (npm) | `attach`: a graph on a host's DuckDB, read through a `Graph` — its types and their properties with each one's statistics, a vertex, the edges of a type, the edges at a vertex, search, common values, and patterns across types as SQL (`match`, and `reach`, a filter on one type carried to another) — over a catalog of a view per vertex and edge type over the Parquet chunks, and the information files as `graphar_vertex_types`, `graphar_edge_types`, `graphar_properties`, `graphar_extra_info` and `graphar_chunks` (every chunk file, by the name the host resolved it to), and `graphar_column_stats`, each property's nulls, bounds and distinct count combined from its chunks' Parquet `Statistics`. A graph whose document names an RML-Core mapping (every graph `graphar-rdf` writes) is also read as RDF, `graph.rdf`: each type, property and edge type with its IRI, term type and datatype from `mapping.ttl`, its labels from the saved shapes, and `match(pattern)`, a triple pattern as SQL over the views, which `triples(pattern)` runs. TypeScript only: every file is read through the engine |
 
 They are tested against every information file and the Parquet data of
 [incubator-graphar-testing](https://github.com/apache/incubator-graphar-testing), and
@@ -47,7 +47,7 @@ specification lists. These crates follow the specification:
 - `graphar-parquet` takes the Arrow type of each user-defined type from the caller
   (`UserTypes`), because the specification defines none; a column must match it exactly. `langString`
   as `STRUCT<value: STRING, lang: STRING>` is stored as Parquet `LIST<STRUCT<value, lang>>`.
-- `graphar-duckdb` reads the Parquet types as they are (a DuckDB `STRUCT(value VARCHAR, lang
+- `@kanzo-tech/graphar` reads the Parquet types as they are (a DuckDB `STRUCT(value VARCHAR, lang
   VARCHAR)[]`), and needs `userTypes` only to type a view that has no rows.
 
 `graphar-info` still carries `time`, which the specification lists; a writer that wants a reader
@@ -102,21 +102,26 @@ each table and column becomes triples; each vertex type's triples map adds one s
 `dct:conformsTo` its shape, which generates no triple and is what the producer's typing says of
 every row. The writer saves the shape document beside the graph exactly as it read it, as
 `shapes.ttl` (SHACL in Turtle), `shapes.shex` (ShExC) or `shapes.shexj` (ShExJ), and the graph
-document's `extra_info` names it under the key `shapes`. Labels and descriptions are the shapes' (`sh:name`, `sh:description`; in ShExJ, `rdfs:label`
+document's `extra_info` names it under the key `shapes`, and `mapping.ttl` under the key `mapping`. Labels and descriptions are the shapes' (`sh:name`, `sh:description`; in ShExJ, `rdfs:label`
 and `rdfs:comment` annotations) and are read from there: without shapes there are no labels, and a
 consumer shows an IRI's local name. A triples map is named by the GraphAr names it reads:
 `<#Person>`, `<#Person/nick>`, `<#Person_knows_Person>`.
 
-`@kanzo-tech/graphar-duckdb`'s `attachRdfGraph` reads such a graph back. It attaches it as
-`attachGraph` does, and refuses one without `mapping.ttl`. It parses the mapping with N3.js, reads only
+`@kanzo-tech/graphar`'s `attach` reads such a graph back: there is one way to attach a graph, and
+the file, not the caller, says whether it is RDF. When the graph document's `extra_info` names a
+mapping, the `Graph` has `rdf`, and a mapping it names that does not read is refused. It parses the
+mapping with N3.js, reads only
 the RML-Core subset `graphar-rdf` writes, refuses anything else, and matches each triples map to
 its type, column or edge type by its name, never by its SQL. Each vertex type has `iri` (the class
 its shape fixes) and `shape`, each property `iri` (the predicate), `termType` and `datatype`, and
 each edge type `iri`, each with the `label` and `description` its shapes give. Those come from
 `sh:name` and `sh:description` in SHACL, or the `rdfs:label` and `rdfs:comment` annotations in
 ShExJ, preferring the untagged literal, then `en`; ShExC gives none, since there is no ShExC parser
-here. `triples()` runs each triples map's logical source on the host's DuckDB, with the mapping's
-table names bound to the graph's views as the statement's own common table expressions. It gives
+here. `match(pattern)` reads the mapping backwards: a triple pattern (subject, predicate, object,
+each bound or free) becomes one SQL query over only the triples maps that can make such a triple,
+a bound subject or object a filter on its column, with the mapping's table names bound to the
+graph's views as the statement's own common table expressions. It composes with any other SQL on
+the engine, and `triples(pattern)` runs it and answers RDF/JS quads. Without a pattern it gives
 back `people.ttl`'s triples up to canonical lexical form: `conformance/rdf` holds the three graphs
 the example writes from it, and CI checks they are exactly what the writer writes today.
 
@@ -124,7 +129,7 @@ the example writes from it, and CI checks they are exactly what the writer write
 
 A release is a GitHub Release, and its body is the release notes: there is no CHANGELOG. The tag
 decides the version and every artifact shares it (`graphar-info`, `graphar-parquet`,
-`graphar-rdf`, `@kanzo-tech/graphar-duckdb`).
+`graphar-rdf`, `@kanzo-tech/graphar`).
 
 1. In one commit, set `version` in every `crates/*/Cargo.toml` and in `packages/*/package.json` (and
    the versions of the path dependencies in the root `Cargo.toml`), then merge it.

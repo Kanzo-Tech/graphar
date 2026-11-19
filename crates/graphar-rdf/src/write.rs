@@ -27,7 +27,8 @@ use crate::schema::{Cardinality, Column, Error, Object, Schema, Storage, user_ty
 use crate::shapes::Shapes;
 use crate::term::{Value, parse};
 use crate::{
-    MAPPING_FILE, R2RML_FILE, RDF_LANG_STRING, RDF_TYPE, SHAPES_KEY, SUBJECT, plan, r2rml, rml,
+    MAPPING_FILE, MAPPING_KEY, R2RML_FILE, RDF_LANG_STRING, RDF_TYPE, SHAPES_KEY, SUBJECT, plan,
+    r2rml, rml,
 };
 
 /// How [`write()`] writes.
@@ -168,9 +169,9 @@ pub fn by_class<'a>(
 /// arrived in among that type's subjects. Within a part the edges are sorted by source and then
 /// destination row.
 ///
-/// The shape document is saved exactly as it was read, as [`crate::SHACL_FILE`],
-/// [`crate::SHEXC_FILE`] or [`crate::SHEXJ_FILE`] by its syntax, and the graph document's
-/// `extra_info` names it under [`SHAPES_KEY`]: the labels of the types and properties are the
+/// The graph document's `extra_info` names `mapping.ttl` under [`MAPPING_KEY`]. The shape document
+/// is saved exactly as it was read, as [`crate::SHACL_FILE`], [`crate::SHEXC_FILE`] or
+/// [`crate::SHEXJ_FILE`] by its syntax, and `extra_info` names it under [`SHAPES_KEY`]: the labels of the types and properties are the
 /// shapes', and a reader finds them there.
 ///
 /// **Nothing is validated but what placement checks.** The subjects are the producer's to type,
@@ -213,10 +214,13 @@ pub async fn write(
     let plan = plan(schema)?;
     let text = rml(&plan);
     let mut info = schema.graph_info(&options.name, options.chunk_size);
-    // The shape document, saved as it was read, and named in the graph document.
+    // The mapping and the shape document, named in the graph document: GraphAr's own extension
+    // point, so a reader finds them without guessing at file names.
     let file = shapes.syntax().file();
-    info.extra_info
-        .push((SHAPES_KEY.to_owned(), file.to_owned()));
+    info.extra_info.extend([
+        (MAPPING_KEY.to_owned(), MAPPING_FILE.to_owned()),
+        (SHAPES_KEY.to_owned(), file.to_owned()),
+    ]);
 
     let mut subjects = pin!(subjects);
     let mut sink = Sink::new(store, root, schema, &info, options);

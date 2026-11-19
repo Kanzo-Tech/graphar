@@ -7,5 +7,7 @@ edges:
   - Person_worksFor_Organization.edge.yml
 version: gar/v1 (langString)
 extra_info:
+  - key: mapping
+    value: mapping.ttl
   - key: shapes
     value: shapes.shex

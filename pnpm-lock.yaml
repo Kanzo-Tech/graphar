@@ -8,7 +8,7 @@ importers:
 
   .: {}
 
-  packages/graphar-duckdb:
+  packages/graphar:
     dependencies:
       '@rdfjs/types':
         specifier: 2.0.1

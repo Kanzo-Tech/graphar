@@ -6,6 +6,7 @@
 
 import { GraphArError } from './error.js';
 import type { Engine, Table } from './attach.js';
+import type { Rdf } from './rdf.js';
 
 /** What every read that can be stopped takes. */
 export interface Signal {
@@ -22,6 +23,8 @@ export interface Graph {
   readonly vertexTypes: readonly VertexType[];
   /** In the order of the graph document's `edges`. */
   readonly edgeTypes: readonly EdgeType[];
+  /** The graph read as RDF, when its document names a mapping; absent otherwise. */
+  readonly rdf?: Rdf;
   /** The properties of one vertex, by name, or `null` when the type has no vertex of that index. */
   vertex(type: string, index: number, options?: Signal): Promise<Readonly<Record<string, unknown>> | null>;
   /** Every edge of an edge type, by {@link EdgeType.name}: the index of each end, in the order stored. */

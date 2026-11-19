@@ -1,12 +1,12 @@
 {
-  "name": "@kanzo-tech/graphar-duckdb",
+  "name": "@kanzo-tech/graphar",
   "version": "0.1.0-alpha.1",
-  "description": "An Apache GraphAr graph attached to a DuckDB engine and read as a Graph: its types, properties and their Parquet statistics, a vertex, the edges of a type or at a vertex, search, and patterns across types as SQL, over a view per vertex and edge type; and a graph graphar-rdf wrote read as an RdfGraph, its types and properties with their IRIs from the RML mapping and their labels from the shapes, and its triples evaluated on the engine. TypeScript only: no WASM, no engine of its own.",
+  "description": "An Apache GraphAr graph attached to the host's DuckDB and read as a Graph: its types, properties and their Parquet statistics, a vertex, the edges of a type or at a vertex, search, and patterns across types as SQL, over a view per vertex and edge type; and, for a graph whose document names an RML-Core mapping, the graph read as RDF: its types with their IRIs and labels, and triple patterns as SQL over the views. TypeScript only: no engine of its own.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Kanzo-Tech/graphar.git",
-    "directory": "packages/graphar-duckdb"
+    "directory": "packages/graphar"
   },
   "keywords": ["graphar", "graph", "property-graph", "duckdb", "parquet", "rdf", "rml"],
   "publishConfig": {

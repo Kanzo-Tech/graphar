@@ -9,10 +9,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 
 import type { Quad, Term } from '@rdfjs/types';
-import { Parser } from 'n3';
+import { DataFactory, Parser } from 'n3';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { attachRdfGraph, GraphArError, type RdfGraph, type Resolve } from '../src/index.js';
+import { attach, GraphArError, type Rdf, type Resolve, type TriplePattern } from '../src/index.js';
 import { engine } from './engine.js';
 
 const RDF = resolvePath(import.meta.dirname, '../../../conformance/rdf');
@@ -53,9 +53,9 @@ const canonical = async (): Promise<string[]> =>
     .map((l) => l.replace(`"031"^^<${XSD}integer>`, `"31"^^<${XSD}integer>`).replace(`"0"^^<${XSD}boolean>`, `"false"^^<${XSD}boolean>`))
     .sort();
 
-const all = async (g: RdfGraph): Promise<string[]> => {
+const all = async (r: Rdf, pattern?: TriplePattern): Promise<string[]> => {
   const out: string[] = [];
-  for await (const q of g.triples()) out.push(line(q));
+  for await (const q of r.triples(pattern)) out.push(line(q));
   return out.sort();
 };
 
@@ -63,27 +63,57 @@ describe.each([
   ['shacl', 'people.shacl.ttl'],
   ['shexj', 'people.shex.json'],
   ['shexc', 'people.shex'],
-] as const)('attachRdfGraph over the graph written with %s', async (syntax, source) => {
+] as const)('attach over the graph written with %s', async (syntax, source) => {
   const e = await engine();
-  const g = await attachRdfGraph(e, `rdf_${syntax}`, under(join(RDF, syntax)), { entry });
+  const g = await attach(e, `rdf_${syntax}`, under(join(RDF, syntax)), { entry });
+  const r = g.rdf!;
 
   it('reads back every triple it was written from, in canonical form', async () => {
     const expected = await canonical();
-    const got = await all(g);
+    const got = await all(r);
     expect(got).toEqual(expected);
     expect(new Set(got).size).toBe(got.length);
   });
 
-  it('keeps the shape document exactly as it was given', async () => {
-    expect(g.shapes).toEqual({ syntax, text: await readFile(join(DATA, source), 'utf8') });
+  it('keeps the shape document and the mapping exactly as they were saved', async () => {
+    expect(r.shapes).toEqual({ syntax, text: await readFile(join(DATA, source), 'utf8') });
+    expect(r.mapping).toBe(await readFile(join(RDF, syntax, 'mapping.ttl'), 'utf8'));
+  });
+
+  it('reads a triple pattern from only the maps that can make it', async () => {
+    const { namedNode, literal } = DataFactory;
+    const ex = (p: string) => namedNode(`https://example.org/${p}`);
+    const every = await all(r);
+    const patterns: [TriplePattern, (l: string) => boolean][] = [
+      [{ subject: ex('alice') }, (l) => l.startsWith('<https://example.org/alice> ')],
+      [{ predicate: namedNode('http://xmlns.com/foaf/0.1/name') }, (l) => l.includes(' <http://xmlns.com/foaf/0.1/name> ')],
+      [{ predicate: ex('knows'), object: ex('alice') }, (l) => l.endsWith(' <https://example.org/knows> <https://example.org/alice>')],
+      [
+        { predicate: namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#type'), object: ex('Organization') },
+        (l) => l.endsWith(' <https://example.org/Organization>'),
+      ],
+      [{ object: literal('31', namedNode(`${XSD}integer`)) }, (l) => l.endsWith(` "31"^^<${XSD}integer>`)],
+      [{ object: literal('Alice') }, (l) => l.endsWith(' "Alice"')],
+      [{ predicate: ex('nothing') }, () => false],
+    ];
+    for (const [pattern, keep] of patterns) {
+      const expected = every.filter(keep);
+      expect(await all(r, pattern)).toEqual(expected);
+    }
+    expect(every.filter((l) => l.endsWith(' "Alice"'))).toHaveLength(1);
+    // A predicate only one edge type has reads only that edge type's relation.
+    const { sql } = r.match({ predicate: ex('knows') });
+    const body = sql.slice(sql.indexOf(') SELECT ') + 2);
+    expect(body).toContain('"Person_knows_Person"');
+    expect(body).not.toContain('"Organization"');
   });
 
   it('says what the mapping says of every type, property and edge type', () => {
-    expect(g.vertexTypes.map((v) => [v.type, v.iri, v.shape])).toEqual([
+    expect(r.vertexTypes.map((v) => [v.type, v.iri, v.shape])).toEqual([
       ['Organization', 'https://example.org/Organization', 'https://example.org/shapes/Organization'],
       ['Person', 'https://example.org/Person', 'https://example.org/shapes/Person'],
     ]);
-    const person = g.vertexTypes.find((v) => v.type === 'Person')!;
+    const person = r.vertexTypes.find((v) => v.type === 'Person')!;
     const p = (name: string) => {
       const { iri, termType, datatype } = person.properties.find((x) => x.name === name)!;
       return { iri, termType, datatype };
@@ -99,16 +129,16 @@ describe.each([
     });
     expect(p('tag')).toEqual({ iri: 'https://example.org/tag', termType: 'Literal', datatype: `${XSD}string` });
     expect(p('motto').datatype).toBe('http://www.w3.org/1999/02/22-rdf-syntax-ns#langString');
-    expect(g.edgeTypes.map((t) => [t.name, t.iri])).toEqual([
+    expect(r.edgeTypes.map((t) => [t.name, t.iri])).toEqual([
       ['Person_knows_Person', 'https://example.org/knows'],
       ['Person_worksFor_Organization', 'https://example.org/worksFor'],
     ]);
   });
 
   it('labels what the shapes label, and nothing else', () => {
-    const person = g.vertexTypes.find((v) => v.type === 'Person')!;
-    const organization = g.vertexTypes.find((v) => v.type === 'Organization')!;
-    const knows = g.edgeTypes.find((t) => t.edgeType === 'knows')!;
+    const person = r.vertexTypes.find((v) => v.type === 'Person')!;
+    const organization = r.vertexTypes.find((v) => v.type === 'Organization')!;
+    const knows = r.edgeTypes.find((t) => t.edgeType === 'knows')!;
     const label = (name: string) => {
       const { label, description } = person.properties.find((x) => x.name === name)!;
       return { label, description };
@@ -127,25 +157,26 @@ describe.each([
     expect([organization.label, organization.description]).toEqual([undefined, undefined]);
   });
 
-  it('is still the Graph attachGraph answers', async () => {
+  it('is still the Graph attach answers for any graph', async () => {
     expect(await g.vertex('Person', 0)).toMatchObject({ subject: 'https://example.org/alice', name: 'Alice' });
     expect(g.vertexTypes.map((v) => v.count)).toEqual([1, 4]);
   });
 });
 
-describe('attachRdfGraph refuses', async () => {
+describe('attach and the mapping', async () => {
   const e = await engine();
 
-  it('a graph with no mapping, before it attaches anything', async () => {
+  it('reads no RDF where the graph document names no mapping', async () => {
+    await using sample = await attach(e, 'sample', under(SAMPLE), { entry: 'sample.graph.yml' });
+    expect(sample.rdf).toBeUndefined();
+  });
+
+  it('refuses a mapping the graph document names and that does not read, and gives the catalog back', async () => {
     const dir = await copy(join(RDF, 'shacl'), 'mapping.ttl', null);
-    const before = e.statements.length;
-    const err = await attachRdfGraph(e, 'none', under(dir), { entry }).catch((x: unknown) => x);
+    const err = await attach(e, 'none', under(dir), { entry }).catch((x: unknown) => x);
     expect(err).toBeInstanceOf(GraphArError);
     expect((err as GraphArError).code).toBe('unreadable');
-    expect((err as GraphArError).document).toBe('mapping.ttl');
-    expect(e.statements.slice(before).some((s) => s.startsWith('ATTACH'))).toBe(false);
-    const sample = await attachRdfGraph(e, 'sample', under(SAMPLE), { entry: 'sample.graph.yml' }).catch((x: unknown) => x);
-    expect((sample as GraphArError).code).toBe('unreadable');
+    expect(await e.rows(`SELECT * FROM duckdb_databases() WHERE database_name = 'none'`)).toEqual([]);
   });
 
   it.each([
@@ -156,7 +187,7 @@ describe('attachRdfGraph refuses', async () => {
     ['Turtle that is not', (t: string) => `${t} <`, 'unparseable'],
   ])('a mapping with %s', async (_, edit, code) => {
     const dir = await copy(join(RDF, 'shacl'), 'mapping.ttl', edit);
-    const err = await attachRdfGraph(e, 'refused', under(dir), { entry }).catch((x: unknown) => x);
+    const err = await attach(e, 'refused', under(dir), { entry }).catch((x: unknown) => x);
     expect(err).toBeInstanceOf(GraphArError);
     expect((err as GraphArError).code).toBe(code);
     // The catalog is given back.

@@ -446,7 +446,13 @@ fn the_shape_document_is_saved_as_it_was_read() {
         );
         assert_eq!(
             written.info.extra_info,
-            [(graphar_rdf::SHAPES_KEY.to_owned(), (*file).to_owned())]
+            [
+                (
+                    graphar_rdf::MAPPING_KEY.to_owned(),
+                    graphar_rdf::MAPPING_FILE.to_owned()
+                ),
+                (graphar_rdf::SHAPES_KEY.to_owned(), (*file).to_owned())
+            ]
         );
         let graph = String::from_utf8(files["graph.graph.yml"].clone()).expect("UTF-8");
         assert!(graph.contains(file), "{graph}");

@@ -1,5 +1,5 @@
 //! The sample graph: what the tests write and read back, what `examples/sample.rs` writes to
-//! `conformance/sample/`, and what GraphAr's own C++ reader and `graphar-duckdb` open there.
+//! `conformance/sample/`, and what GraphAr's own C++ reader and `@kanzo-tech/graphar` open there.
 //!
 //! It is small and covers what a reader can get wrong: several chunks per vertex type, two
 //! property groups on one type, every built-in type C++ reads (`time` and `list` have no reader in

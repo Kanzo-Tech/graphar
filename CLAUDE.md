@@ -25,7 +25,7 @@
   `cargo test --workspace`,
   `cargo check --target wasm32-unknown-unknown -p graphar-info -p graphar-parquet -p graphar-rdf`, and
   `pnpm install && pnpm typecheck && pnpm test && pnpm build`.
-- `@kanzo-tech/graphar-duckdb` links no engine and loads no WASM: every file it reads goes through
+- `@kanzo-tech/graphar` links no engine and loads no WASM: every file it reads goes through
   the host's DuckDB, by the name the host's `resolve` gives it.
 - Releases are GitHub Releases (`.github/workflows/release.yml`, see the README): the tag `v<version>`
   must equal every crate's and package's `version`, the release body is the release notes, and there
