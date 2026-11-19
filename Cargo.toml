@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "bindings/*"]
 
 [workspace.package]
 edition = "2024"
@@ -43,7 +43,20 @@ object_store = { version = "0.14", default-features = false }
 # without `std`'s executor features it reaches no runtime.
 futures-util = { version = "0.3", default-features = false }
 bytes = "1"
+# The wasm-bindgen bindings (`bindings/`): the CLI that makes their glue must be this exact version.
+wasm-bindgen = "=0.2.120"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"
+
+# The profile of the wasm32 module `@kanzo-tech/graphar/write` loads: small over fast to build.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

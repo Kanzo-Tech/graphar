@@ -100,7 +100,14 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
+      - run: rustup toolchain install
+      - name: wasm-bindgen-cli, at the version of the crate
+        run: cargo install --locked --version "$(sed -n 's/^wasm-bindgen = "=\(.*\)"$/\1/p' Cargo.toml)" wasm-bindgen-cli
       - run: pnpm install --frozen-lockfile
+      # `/write` carries graphar-rdf's writer built for wasm32, in `pkg/`.
+      - run: pnpm build:wasm
+        env:
+          RUSTFLAGS: --cfg getrandom_backend="wasm_js"
       - run: pnpm build
       - name: Publish
         run: |

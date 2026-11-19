@@ -32,7 +32,7 @@ jobs:
           RUSTFLAGS: -D warnings --cfg getrandom_backend="wasm_js"
         run: >-
           cargo check --target wasm32-unknown-unknown --locked
-          -p graphar-info -p graphar-parquet -p graphar-rdf
+          -p graphar-info -p graphar-parquet -p graphar-rdf -p graphar-rdf-wasm
       - name: no tokio in the wasm32 build
         run: |
           if cargo tree --target wasm32-unknown-unknown -e normal --workspace --locked --prefix none \
@@ -119,7 +119,19 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # `/write` loads graphar-rdf's writer built for wasm32 (`pnpm build:wasm`), which the
+      # typecheck, the tests and the build all need.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: wasm-bindgen-cli, at the version of the crate
+        run: |
+          want=$(sed -n 's/^wasm-bindgen = "=\(.*\)"$/\1/p' Cargo.toml)
+          wasm-bindgen --version 2>/dev/null | grep -qx "wasm-bindgen $want" \
+            || cargo install --locked --version "$want" wasm-bindgen-cli
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build:wasm
+        env:
+          RUSTFLAGS: -D warnings --cfg getrandom_backend="wasm_js"
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build

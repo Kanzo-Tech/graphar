@@ -23,10 +23,12 @@
   assumed.
 - Before pushing: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`,
-  `cargo check --target wasm32-unknown-unknown -p graphar-info -p graphar-parquet -p graphar-rdf`, and
-  `pnpm install && pnpm typecheck && pnpm test && pnpm build`.
-- `@kanzo-tech/graphar` links no engine and loads no WASM: every file it reads goes through
-  the host's DuckDB, by the name the host's `resolve` gives it.
+  `cargo check --target wasm32-unknown-unknown -p graphar-info -p graphar-parquet -p graphar-rdf -p graphar-rdf-wasm`,
+  and `pnpm install && pnpm build:wasm && pnpm typecheck && pnpm test && pnpm build`.
+- `@kanzo-tech/graphar` links no engine: every file it reads goes through the host's DuckDB, by the
+  name the host's `resolve` gives it, and every file it writes through the host's `put`. Only
+  `/write` loads WASM: `bindings/graphar-rdf`, graphar-rdf's writer for wasm32, built into `pkg/` by
+  `pnpm build:wasm` with wasm-bindgen-cli at the exact version of the `wasm-bindgen` crate.
 - Releases are GitHub Releases (`.github/workflows/release.yml`, see the README): the tag `v<version>`
   must equal every crate's and package's `version`, the release body is the release notes, and there
   is no CHANGELOG. It needs the secrets `CRATES_IO_TOKEN` and `NPM_TOKEN`. Never publish by hand.
