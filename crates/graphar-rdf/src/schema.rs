@@ -31,7 +31,7 @@ pub struct VertexType {
     pub label: String,
     /// The one class the type's shape fixes: every row has exactly that `rdf:type` triple, which
     /// the mapping writes as the triples map's class and no column stores. A type is not a class:
-    /// its rows are the subjects that validate against its shape ([`crate::Typing`]).
+    /// its rows are the subjects of its type ([`crate::Subject`]).
     pub class: Option<String>,
     /// The IRI of the shape the type is, when the schema was read from shapes
     /// ([`crate::shapes`]): every row validates against it, and the mapping says so of the type's
@@ -147,20 +147,16 @@ pub enum Error {
     /// triples [`crate::write()`] takes are grouped by subject, and it checks that they are.
     #[error("<{0}> reappears after its triples ended: the triples are not grouped by subject")]
     Ungrouped(String),
-    /// A subject the typing gives no type, or more than one: the graph does not conform, and it is
-    /// not committed.
-    #[error("<{subject}> {}", typed(.types, .reasons))]
+    /// A subject typed with no vertex type of the schema: by [`crate::by_class()`], with none or
+    /// more than one; by its [`crate::Subject`], with a label the schema does not have. The graph
+    /// is not committed.
+    #[error("<{subject}> {}", typed(.types))]
     Typing {
         /// The subject.
         subject: String,
-        /// The vertex types it has: none, or more than one.
+        /// The types it was given: none, more than one, or one the schema does not have.
         types: Vec<String>,
-        /// Why it has none of them, shape by shape, as the validator says.
-        reasons: Vec<String>,
     },
-    /// The validator failed: what rudof says.
-    #[error("the validator: {0}")]
-    Validator(String),
     /// Writing or reading the GraphAr files.
     #[error(transparent)]
     Parquet(#[from] graphar_parquet::Error),
@@ -178,10 +174,10 @@ pub enum Error {
     Invalid(String),
 }
 
-fn typed(types: &[String], reasons: &[String]) -> String {
+fn typed(types: &[String]) -> String {
     match types {
-        [] if reasons.is_empty() => "has no type".to_owned(),
-        [] => format!("validates against no shape: {}", reasons.join("; ")),
+        [] => "has no type".to_owned(),
+        [label] => format!("has the type `{label}`, which the schema does not have"),
         _ => format!("has more than one type: {}", types.join(", ")),
     }
 }

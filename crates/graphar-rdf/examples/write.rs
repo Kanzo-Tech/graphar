@@ -4,11 +4,11 @@
 //! cargo run -p graphar-rdf --example write -- <shapes.ttl | shapes.shex | shapes.shex.json> <data.ttl | data.nt> <dir> [chunk_size]
 //! ```
 //!
-//! Each subject is typed by the shape it validates against. A graph that does not conform to the
-//! shapes is refused, naming the subject or the triple and why.
+//! Each subject is typed by its class: the shape that fixes its `rdf:type`. A graph that does not
+//! conform to the shapes is refused, naming the subject or the triple and why.
 
 use futures::executor::block_on;
-use graphar_rdf::{Options, Typing, grouped, shapes, write};
+use graphar_rdf::{Options, by_class, grouped, shapes, write};
 use object_store::{local::LocalFileSystem, path::Path};
 use oxttl::{NTriplesParser, TurtleParser};
 
@@ -45,8 +45,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let written = block_on(write(
         &store,
         &Path::from(""),
-        &Typing::Validate(&shapes),
-        grouped(triples),
+        &shapes,
+        by_class(shapes.schema(), grouped(triples)),
         &options,
     ))?;
     println!(

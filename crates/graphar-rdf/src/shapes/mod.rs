@@ -1,5 +1,5 @@
-//! A [`Schema`] from a shape document: SHACL ([`shacl`]) or ShEx ([`shex`]), and what validates
-//! a graph against the document ([`Shapes`]).
+//! A [`Schema`] from a shape document: SHACL ([`shacl`]) or ShEx ([`shex`]), kept with the
+//! document ([`Shapes`]).
 //!
 //! **A shape is a type.** Every shape named by an IRI becomes a vertex type, and a node belongs to
 //! the type of the shape it validates against, whatever its triples claim: `rdf:type` is a predicate
@@ -37,7 +37,6 @@ use std::collections::HashSet;
 
 use crate::SUBJECT;
 use crate::schema::{Cardinality, Column, EdgeType, Error, Object, Schema, VertexType};
-use crate::validate::Document;
 
 /// What a property of a shape points at, before the shapes are matched to types.
 #[derive(Clone, Debug)]
@@ -57,13 +56,11 @@ pub(crate) struct Shape {
     pub properties: Vec<(String, Target, Cardinality)>,
 }
 
-/// A shape document: the [`Schema`] it describes, the shapes themselves, which
-/// [`crate::Typing::Validate`] validates a graph against, and the document as it was read, which
+/// A shape document: the [`Schema`] it describes, and the document as it was read, which
 /// [`crate::write()`] saves beside the graph.
 #[derive(Debug)]
 pub struct Shapes {
     schema: Schema,
-    pub(crate) document: Document,
     syntax: Syntax,
     text: String,
 }
@@ -115,22 +112,12 @@ impl Shapes {
     pub fn text(&self) -> &str {
         &self.text
     }
-
-    /// The shape of each vertex type, in the schema's order: every type of these shapes has one.
-    pub(crate) fn ids(&self) -> Vec<String> {
-        self.schema
-            .vertices
-            .iter()
-            .map(|v| v.shape.clone().expect("a type read from a shape"))
-            .collect()
-    }
 }
 
 /// The shapes of a document, read off it.
-pub(crate) fn read(shapes: &[Shape], document: Document, syntax: Syntax, text: &str) -> Shapes {
+pub(crate) fn read(shapes: &[Shape], syntax: Syntax, text: &str) -> Shapes {
     Shapes {
         schema: schema(shapes),
-        document,
         syntax,
         text: text.to_owned(),
     }

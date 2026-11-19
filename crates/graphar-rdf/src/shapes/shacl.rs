@@ -6,13 +6,11 @@ use rudof_rdf::rdf_core::term::Object as Node;
 use rudof_rdf::rdf_core::{RDFFormat, SHACLPath};
 use rudof_rdf::rdf_impl::{OxigraphInMemory, ReaderMode};
 use shacl::ast::{ASTComponent, ASTSchema, ASTShape};
-use shacl::ir::{IRSchema, RecursionSemantics};
 use shacl::rdf::ShaclParser;
 use shacl::types::{NodeKind, Value};
 
 use super::{Shape, Shapes, Syntax, Target};
 use crate::schema::{Cardinality, Error, Object};
-use crate::validate::Document;
 use crate::{RDF_LANG_STRING, RDF_TYPE};
 
 /// The shapes of a SHACL shapes graph written in Turtle.
@@ -25,16 +23,7 @@ pub fn from_turtle(text: &str) -> Result<Shapes, Error> {
     let schema = ShaclParser::new(graph)
         .parse()
         .map_err(|e| Error::Shapes(e.to_string()))?;
-    // The greatest fixpoint: a node validates against a recursive shape unless something refutes
-    // it, which is the maximal typing (`crate::Typing::Validate`).
-    let compiled = IRSchema::compile_with_recursion(&schema, RecursionSemantics::Gfp)
-        .map_err(|e| Error::Shapes(e.to_string()))?;
-    Ok(super::read(
-        &shapes(&schema)?,
-        Document::Shacl(Box::new(compiled)),
-        Syntax::ShaclTurtle,
-        text,
-    ))
+    Ok(super::read(&shapes(&schema)?, Syntax::ShaclTurtle, text))
 }
 
 fn shapes(schema: &ASTSchema) -> Result<Vec<Shape>, Error> {

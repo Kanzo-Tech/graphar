@@ -32,7 +32,7 @@ export interface RdfGraph extends Graph {
    * reads in its canonical lexical form: the writer stored its value.
    */
   triples(options?: Signal): AsyncIterable<Quad>;
-  /** The shape document the writer validated against, as it was given; absent when there was none. */
+  /** The shape document the graph conforms to, as the writer saved it; absent when it saved none. */
   readonly shapes?: Shapes;
 }
 
@@ -54,11 +54,11 @@ export interface Labelled {
   readonly description?: string;
 }
 
-/** A vertex type: the subjects that validate against one shape. */
+/** A vertex type: the subjects of one shape. */
 export interface RdfVertexType extends VertexType, Labelled {
   /** The class the type's shape fixes: every subject has this `rdf:type`. */
   readonly iri?: string;
-  /** The IRI of the shape every subject validates against; absent when no shape typed the graph. */
+  /** The IRI of the shape every subject conforms to; absent when no shape typed the graph. */
   readonly shape?: string;
   readonly properties: readonly RdfProperty[];
 }

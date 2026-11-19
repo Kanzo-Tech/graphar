@@ -1,6 +1,6 @@
 //! Triples and a schema to a GraphAr graph.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::pin::pin;
 use std::sync::Arc;
 
@@ -24,8 +24,8 @@ use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 
 use crate::schema::{Cardinality, Column, Error, Object, Schema, Storage, user_types};
+use crate::shapes::Shapes;
 use crate::term::{Value, parse};
-use crate::typing::{Typing, assumed, validated};
 use crate::{
     MAPPING_FILE, R2RML_FILE, RDF_LANG_STRING, RDF_TYPE, SHAPES_KEY, SUBJECT, plan, r2rml, rml,
 };
@@ -67,10 +67,22 @@ pub struct Written {
 /// A subject's place: its vertex type and row.
 type Place = (usize, u64);
 
+/// **One subject, typed**: its triples, every one with the same IRI subject, and the label of the
+/// vertex type it is a row of. The item [`write()`] streams: whoever produces the triples says
+/// which type each subject has, because a shape is a type and only the producer knows which shape
+/// it produced a subject for (a mapping's triples map, a validator's shape map, a class).
+/// [`by_class()`] types subjects by their `rdf:type`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Subject {
+    /// The vertex type, by its label in the schema.
+    pub label: String,
+    /// The subject's triples.
+    pub triples: Vec<Triple>,
+}
+
 /// **`triples` grouped by subject**: each subject's triples together, the subjects in IRI order,
-/// and a triple given twice given once. The stream [`write()`] takes, from triples held in memory
-/// in any order (a parsed file, a test); a blank-node subject comes last, and [`write()`] refuses
-/// it. In IRI order a graph is written exactly as it was before [`write()`] streamed.
+/// and a triple given twice given once. The stream [`by_class()`] takes, from triples held in
+/// memory in any order (a parsed file, a test); a blank-node subject comes last, and it is refused.
 pub fn grouped(
     triples: impl IntoIterator<Item = Triple>,
 ) -> impl Stream<Item = Result<Triple, Error>> + Unpin {
@@ -85,20 +97,58 @@ pub fn grouped(
     stream::iter(by_subject.into_values().flat_map(distinct).map(Ok))
 }
 
-/// **Writes the triples of `triples` as the GraphAr graph `schema` reads**, under `root`: every
-/// vertex table, every edge table, `mapping.ttl` and `mapping.r2rml.ttl`, the shape document, and
-/// the information files last, so a reader that finds the graph document finds everything it
-/// names.
+/// **Subjects typed by class**: each run of `triples` with one subject, of the vertex type whose
+/// shape fixes the class of its `rdf:type` triple (`{FOCUS rdf:type c}@s`, a shape map). Exactly
+/// one type must: a subject whose classes fix none, or more than one, is refused
+/// ([`Error::Typing`]). `triples` is grouped by subject ([`grouped()`]); a subject that runs twice
+/// is two [`Subject`]s, which [`write()`] refuses.
+pub fn by_class<'a>(
+    schema: &'a Schema,
+    triples: impl Stream<Item = Result<Triple, Error>> + 'a,
+) -> impl Stream<Item = Result<Subject, Error>> + 'a {
+    let groups = Groups {
+        triples: Box::pin(triples),
+        next: None,
+    };
+    stream::try_unfold(groups, move |mut groups| async move {
+        let Some((subject, triples)) = groups.next().await? else {
+            return Ok(None);
+        };
+        let classes: HashSet<&str> = triples
+            .iter()
+            .filter(|t| t.predicate.as_str() == RDF_TYPE)
+            .filter_map(|t| match &t.object {
+                Term::NamedNode(c) => Some(c.as_str()),
+                _ => None,
+            })
+            .collect();
+        let types: Vec<&str> = schema
+            .vertices
+            .iter()
+            .filter(|v| v.class.as_deref().is_some_and(|c| classes.contains(c)))
+            .map(|v| v.label.as_str())
+            .collect();
+        let [label] = types[..] else {
+            return Err(Error::Typing {
+                subject,
+                types: types.into_iter().map(str::to_owned).collect(),
+            });
+        };
+        let label = label.to_owned();
+        Ok(Some((Subject { label, triples }, groups)))
+    })
+}
+
+/// **Writes the subjects of `subjects` as the GraphAr graph `shapes` describe**, under `root`:
+/// every vertex table, every edge table, `mapping.ttl` and `mapping.r2rml.ttl`, the shape
+/// document, and the information files last, so a reader that finds the graph document finds
+/// everything it names.
 ///
-/// `triples` is **grouped by subject**: all of a subject's triples are together, one subject after
-/// another, in any order of subjects ([`grouped()`] groups triples held in memory). That is
-/// checked, not trusted: a subject that reappears after another subject's triples is refused
-/// ([`Error::Ungrouped`]). A source that fails ends the stream with its error
-/// ([`Error::Syntax`]), and the graph is not committed.
-///
-/// Under [`Typing::Assume`] it **streams**. Each subject is typed from its own triples, placed and
-/// appended to its type's open chunk, and a chunk is written as soon as it is full. What it holds
-/// is what GraphAr's layout forces and no more:
+/// Each [`Subject`] carries its vertex type, and the writer **streams**: a subject is placed and
+/// appended to its type's open chunk, and a chunk is written as soon as it is full. A subject that
+/// comes twice is refused ([`Error::Ungrouped`]). A source that fails ends the stream with its
+/// error ([`Error::Syntax`]), and the graph is not committed. What it holds is what GraphAr's
+/// layout forces and no more:
 ///
 /// - every subject seen, by its IRI, with its type and row: an adjacency list holds the row of an
 ///   edge's destination, and an edge may name a subject before or after its own triples;
@@ -114,100 +164,92 @@ pub fn grouped(
 /// whose object never arrives as a subject of the destination's type is refused once the stream
 /// ends.
 ///
-/// Under [`Typing::Validate`] it does **not** stream: the validator takes the whole graph, so
-/// every triple is held and every subject typed first, in IRI order, then placed as above.
+/// **Rows are in arrival order.** A subject's row in its type, its internal id, is the order it
+/// arrived in among that type's subjects. Within a part the edges are sorted by source and then
+/// destination row.
 ///
-/// **Rows are in arrival order.** A subject's row in its type, its internal id, is the order its
-/// group arrived in among that type's subjects; before the writer streamed it was the order of
-/// their IRIs. A stream in IRI order, which [`grouped()`] and [`Typing::Validate`] give, writes the
-/// graph exactly as before; any other order writes the same graph up to the order of each type's
-/// rows. Within a part the edges are sorted by source and then destination row.
+/// The shape document is saved exactly as it was read, as [`crate::SHACL_FILE`],
+/// [`crate::SHEXC_FILE`] or [`crate::SHEXJ_FILE`] by its syntax, and the graph document's
+/// `extra_info` names it under [`SHAPES_KEY`]: the labels of the types and properties are the
+/// shapes', and a reader finds them there.
 ///
-/// Under [`Typing::Validate`] the shape document is saved exactly as it was read, as
-/// [`crate::SHACL_FILE`], [`crate::SHEXC_FILE`] or [`crate::SHEXJ_FILE`] by its syntax, and the
-/// graph document's `extra_info` names it under [`SHAPES_KEY`]: the labels of the types and
-/// properties are the shapes', and a reader finds them there. Under [`Typing::Assume`] there is
-/// no shape document to save, and none is written.
+/// **Nothing is validated but what placement checks.** The subjects are the producer's to type,
+/// and validating them against the shapes is a validator's (rudof's, over the written tables
+/// through `mapping.r2rml.ttl`). Only a graph that conforms to the closed reading of the schema is
+/// written, and every triple of it has one place:
 ///
-/// Only a graph that conforms to the closed reading of the schema is written, and every triple of
-/// it has one place:
-///
-/// - every subject is an IRI that `typing` gives exactly one vertex type, and it is a row of that
-///   type ([`Typing`]);
+/// - every subject is an IRI, of the vertex type its [`Subject`] names, and it is a row of that
+///   type;
 /// - every triple of it is the `rdf:type` triple its type's shape fixes (stored nowhere: the
 ///   mapping writes it), a value of a column of that type (an IRI, a tagged string, or a literal
 ///   of the column's datatype that is a value the column holds), or an edge of an edge type from
 ///   it, whose object is a row of the destination;
 /// - a single-valued column has at most one value per subject.
 ///
-/// A literal is stored as its value, and reads back in its canonical lexical form.
+/// A literal is stored as its value, and reads back in its canonical lexical form. A [`Subject`]
+/// with no triples has no IRI and writes nothing.
 ///
 /// **A refused graph is not committed.** The information files are written last, and only once
 /// every triple is placed, so on any refusal there is no graph document, and no reader finds a
-/// graph. What a streaming write had written by then is left: the full chunks of each vertex type
-/// and the parts of the edges from them, without count files, mappings, shape document or
-/// information files. Nothing deletes them; a write to the same root overwrites them. Write into
-/// an empty root: one that holds a graph keeps its information files, which a refused write
-/// leaves naming chunks it has replaced.
+/// graph. What had been written by then is left: the full chunks of each vertex type and the parts
+/// of the edges from them, without count files, mappings, shape document or information files.
+/// Nothing deletes them; a write to the same root overwrites them. Write into an empty root: one
+/// that holds a graph keeps its information files, which a refused write leaves naming chunks it
+/// has replaced.
 ///
 /// # Errors
-/// [`Error::Ungrouped`] for a subject that reappears; [`Error::Typing`] for the first subject, in
-/// arrival order, that the typing gives no type or more than one (under [`Typing::Validate`], in
-/// IRI order, before anything is written); [`Error::Unplaced`] for the first triple with no place;
-/// what the schema's own check refuses; what the source, the validator, the store or the writers
-/// refuse.
+/// [`Error::Ungrouped`] for a subject that comes twice; [`Error::Typing`] for a subject whose label
+/// is no vertex type of the schema; [`Error::Unplaced`] for the first triple with no place, a
+/// blank-node subject, or a triple whose subject is not its [`Subject`]'s; what the schema's own
+/// check refuses; what the source, the store or the writers refuse.
 pub async fn write(
     store: &dyn ObjectStore,
     root: &Path,
-    typing: &Typing<'_>,
-    triples: impl Stream<Item = Result<Triple, Error>>,
+    shapes: &Shapes,
+    subjects: impl Stream<Item = Result<Subject, Error>>,
     options: &Options,
 ) -> Result<Written, Error> {
-    let schema = typing.schema();
+    let schema = shapes.schema();
     let plan = plan(schema)?;
     let text = rml(&plan);
     let mut info = schema.graph_info(&options.name, options.chunk_size);
-    // The shape document validated against, saved as it was read, and named in the graph document.
-    let shapes = match typing {
-        Typing::Validate(shapes) => {
-            let file = shapes.syntax().file();
-            info.extra_info
-                .push((SHAPES_KEY.to_owned(), file.to_owned()));
-            Some((file, shapes.text()))
-        }
-        Typing::Assume(..) => None,
-    };
+    // The shape document, saved as it was read, and named in the graph document.
+    let file = shapes.syntax().file();
+    info.extra_info
+        .push((SHAPES_KEY.to_owned(), file.to_owned()));
 
-    let mut groups = Groups {
-        triples: pin!(triples),
-        next: None,
-    };
+    let mut subjects = pin!(subjects);
     let mut sink = Sink::new(store, root, schema, &info, options);
-    match typing {
-        Typing::Validate(shapes) => {
-            let mut by_subject: BTreeMap<String, Vec<Triple>> = BTreeMap::new();
-            while let Some((subject, ts)) = groups.next().await? {
-                if by_subject.contains_key(&subject) {
-                    return Err(Error::Ungrouped(subject));
-                }
-                by_subject.insert(subject, distinct(ts));
+    while let Some(Subject { label, triples }) = subjects.next().await.transpose()? {
+        let Some(first) = triples.first() else {
+            continue;
+        };
+        let subject = match &first.subject {
+            NamedOrBlankNode::NamedNode(s) => s.clone(),
+            NamedOrBlankNode::BlankNode(_) => {
+                return Err(unplaced(first, "its subject is a blank node"));
             }
-            let typed = validated(shapes, &by_subject)?;
-            for (subject, ts) in by_subject {
-                let v = typed[&subject];
-                sink.subject(subject, v, ts).await?;
-            }
+        };
+        if let Some(t) = triples
+            .iter()
+            .find(|t| !matches!(&t.subject, NamedOrBlankNode::NamedNode(s) if *s == subject))
+        {
+            return Err(unplaced(
+                t,
+                &format!("its subject is not {subject}, the subject it came with"),
+            ));
         }
-        Typing::Assume(_, map) => {
-            while let Some((subject, ts)) = groups.next().await? {
-                if sink.places.contains_key(&subject) {
-                    return Err(Error::Ungrouped(subject));
-                }
-                let ts = distinct(ts);
-                let v = assumed(schema, map, &subject, &ts)?;
-                sink.subject(subject, v, ts).await?;
-            }
+        let subject = subject.into_string();
+        if sink.places.contains_key(&subject) {
+            return Err(Error::Ungrouped(subject));
         }
+        let Some(v) = schema.vertices.iter().position(|v| v.label == label) else {
+            return Err(Error::Typing {
+                subject,
+                types: vec![label],
+            });
+        };
+        sink.subject(subject, v, distinct(triples)).await?;
     }
     let (vertices, edges, count, languages) = sink.finish().await?;
 
@@ -219,9 +261,7 @@ pub async fn write(
         r2rml(&plan, &languages).into_bytes(),
     )
     .await?;
-    if let Some((file, text)) = shapes {
-        put(store, root, file, text.as_bytes().to_vec()).await?;
-    }
+    put(store, root, file, shapes.text().as_bytes().to_vec()).await?;
     write_info(store, root, &info).await?;
     Ok(Written {
         info,
@@ -240,7 +280,7 @@ fn distinct(mut triples: Vec<Triple>) -> Vec<Triple> {
 }
 
 /// The triples of a stream, a subject's at a time: each run of triples with one subject. Whether a
-/// subject runs twice is the reader's to check, against the subjects it already holds.
+/// subject runs twice is the writer's to check, against the subjects it already holds.
 struct Groups<S> {
     triples: S,
     /// The first triple of the next run, read to find the end of this one.
@@ -272,7 +312,7 @@ impl<S: Stream<Item = Result<Triple, Error>> + Unpin> Groups<S> {
                 break;
             }
         }
-        Ok(Some((subject, run)))
+        Ok(Some((subject, distinct(run))))
     }
 }
 
